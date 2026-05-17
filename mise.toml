@@ -1,5 +1,7 @@
-[tools]
-rust = "1.95.0"
+[tools.rust]
+version = "1.95.0"
+profile = "default"
+components = "rust-analyzer,rustfmt,clippy"
 
 [tools."github:dahlia/hongdown"]
 version = "0.3.11"
