@@ -11,5 +11,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
+    # Work around jdx/mise-action not caching ~/.rustup alongside
+    # ~/.local/share/mise, which causes Rust components (e.g. clippy) to go
+    # missing on cache hits.  See: https://github.com/jdx/mise-action/issues/215
+    - uses: actions/cache@v5
+      with:
+        path: ~/.rustup/toolchains
+        key: rustup-v1-${{ runner.os }}-${{ hashFiles('mise.toml') }}
     - uses: jdx/mise-action@v4
     - run: mise run check
