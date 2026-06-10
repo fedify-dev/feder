@@ -9,7 +9,7 @@ extern crate alloc;
 
 use alloc::{boxed::Box, string::String, vec::Vec};
 use iri_string::types::IriString;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeSeq};
 
 /// The canonical Activity Streams JSON-LD context URL.
 pub const ACTIVITYSTREAMS_CONTEXT: &str = "https://www.w3.org/ns/activitystreams";
@@ -40,26 +40,105 @@ impl<T> Reference<T> {
     }
 }
 
-/// A property value that can appear either once or multiple times.
+/// Zero or more ActivityStreams property values.
 ///
-/// ActivityStreams commonly allows fields to be absent, scalar, or arrays.
-/// Absence is represented by `Option<OneOrMany<T>>` on the containing type.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(untagged)]
-pub enum OneOrMany<T> {
-    One(T),
-    Many(Vec<T>),
+/// Use this with `#[serde(default, skip_serializing_if = "References::is_empty")]`
+/// on containing fields. Empty values then serialize as absent, one value
+/// serializes as a scalar, and multiple values serialize as an array.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct References<T> {
+    values: Vec<T>,
 }
 
-impl<T> OneOrMany<T> {
+impl<T> Default for References<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> References<T> {
+    #[must_use]
+    pub fn new() -> Self {
+        Self { values: Vec::new() }
+    }
+
     #[must_use]
     pub fn one(value: T) -> Self {
-        Self::One(value)
+        Self {
+            values: Vec::from([value]),
+        }
     }
 
     #[must_use]
     pub fn many(values: impl Into<Vec<T>>) -> Self {
-        Self::Many(values.into())
+        Self {
+            values: values.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn iter(&self) -> core::slice::Iter<'_, T> {
+        self.values.iter()
+    }
+
+    pub fn into_vec(self) -> Vec<T> {
+        self.values
+    }
+}
+
+impl<T> From<Vec<T>> for References<T> {
+    fn from(values: Vec<T>) -> Self {
+        Self::many(values)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OneOrMany<T> {
+    One(T),
+    Many(Vec<T>),
+}
+
+impl<T> Serialize for References<T>
+where
+    T: Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self.values.as_slice() {
+            [] => {
+                let sequence = serializer.serialize_seq(Some(0))?;
+                sequence.end()
+            }
+            [value] => value.serialize(serializer),
+            values => values.serialize(serializer),
+        }
+    }
+}
+
+impl<'de, T> Deserialize<'de> for References<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match OneOrMany::deserialize(deserializer)? {
+            OneOrMany::One(value) => Ok(References::one(value)),
+            OneOrMany::Many(values) => Ok(References::many(values)),
+        }
     }
 }
 
@@ -359,21 +438,45 @@ mod tests {
     }
 
     #[test]
-    fn one_or_many_deserializes_scalar_and_array() {
-        let one: OneOrMany<Iri> = serde_json::from_value(json!("https://example.com/users/alice"))
-            .expect("deserialize scalar one-or-many value");
-        let many: OneOrMany<Iri> = serde_json::from_value(json!([
+    fn references_deserializes_scalar_and_array() {
+        let one: References<Iri> = serde_json::from_value(json!("https://example.com/users/alice"))
+            .expect("deserialize scalar references value");
+        let many: References<Iri> = serde_json::from_value(json!([
             "https://example.com/users/alice",
             "https://example.com/users/bob"
         ]))
-        .expect("deserialize array one-or-many value");
+        .expect("deserialize array references value");
 
-        assert_eq!(one, OneOrMany::one(iri("https://example.com/users/alice")));
+        assert_eq!(one, References::one(iri("https://example.com/users/alice")));
         assert_eq!(
             many,
-            OneOrMany::many([
+            References::many([
                 iri("https://example.com/users/alice"),
                 iri("https://example.com/users/bob")
+            ])
+        );
+    }
+
+    #[test]
+    fn references_serializes_empty_one_and_many() {
+        assert_eq!(
+            serde_json::to_value(References::<Iri>::new()).expect("serialize empty references"),
+            json!([])
+        );
+        assert_eq!(
+            serde_json::to_value(References::one(iri("https://example.com/users/alice")))
+                .expect("serialize one reference"),
+            json!("https://example.com/users/alice")
+        );
+        assert_eq!(
+            serde_json::to_value(References::many([
+                iri("https://example.com/users/alice"),
+                iri("https://example.com/users/bob")
+            ]))
+            .expect("serialize many references"),
+            json!([
+                "https://example.com/users/alice",
+                "https://example.com/users/bob"
             ])
         );
     }

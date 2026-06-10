@@ -1,4 +1,6 @@
-use feder_vocab::{ACTIVITYSTREAMS_CONTEXT, Accept, Create, Follow, Iri, Note, Reference};
+use feder_vocab::{
+    ACTIVITYSTREAMS_CONTEXT, Accept, Create, Follow, Iri, Note, Reference, References,
+};
 use serde_json::{Value, json};
 
 fn serialize(value: impl serde::Serialize) -> Value {
@@ -124,11 +126,11 @@ fn reference_keeps_id_and_embedded_object_shapes_distinct() {
 }
 
 #[test]
-fn one_or_many_can_represent_common_recipient_shapes() {
-    let single: feder_vocab::OneOrMany<Iri> =
+fn references_can_represent_common_recipient_shapes() {
+    let single: References<Iri> =
         serde_json::from_value(json!("https://www.w3.org/ns/activitystreams#Public"))
             .expect("deserialize single recipient");
-    let multiple: feder_vocab::OneOrMany<Iri> = serde_json::from_value(json!([
+    let multiple: References<Iri> = serde_json::from_value(json!([
         "https://www.w3.org/ns/activitystreams#Public",
         "https://example.com/users/alice/followers"
     ]))
@@ -136,13 +138,39 @@ fn one_or_many_can_represent_common_recipient_shapes() {
 
     assert_eq!(
         single,
-        feder_vocab::OneOrMany::one(iri("https://www.w3.org/ns/activitystreams#Public"))
+        References::one(iri("https://www.w3.org/ns/activitystreams#Public"))
     );
     assert_eq!(
         multiple,
-        feder_vocab::OneOrMany::many([
+        References::many([
             iri("https://www.w3.org/ns/activitystreams#Public"),
             iri("https://example.com/users/alice/followers")
         ])
+    );
+}
+
+#[test]
+fn references_treat_absent_and_empty_array_as_empty() {
+    #[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+    struct Recipients {
+        #[serde(default, skip_serializing_if = "References::is_empty")]
+        to: References<Iri>,
+    }
+
+    let absent: Recipients = serde_json::from_value(json!({})).expect("deserialize absent field");
+    let empty: Recipients =
+        serde_json::from_value(json!({ "to": [] })).expect("deserialize empty field");
+    let one = Recipients {
+        to: References::one(iri("https://www.w3.org/ns/activitystreams#Public")),
+    };
+
+    assert_eq!(absent, empty);
+    assert_eq!(
+        serde_json::to_value(absent).expect("serialize absent"),
+        json!({})
+    );
+    assert_eq!(
+        serde_json::to_value(one).expect("serialize one recipient"),
+        json!({ "to": "https://www.w3.org/ns/activitystreams#Public" })
     );
 }
