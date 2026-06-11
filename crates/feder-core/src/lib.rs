@@ -51,6 +51,7 @@ pub struct UserCreateNote {
 
 /// Something the runtime should perform after core handling.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Action {
     StoreFollower(StoreFollower),
     StoreObject(StoreObject),
@@ -59,7 +60,8 @@ pub enum Action {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoreFollower {
-    pub actor: vocab::Reference<vocab::Actor>,
+    pub follower: vocab::Reference<vocab::Actor>,
+    pub following: vocab::Reference<vocab::Actor>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -70,16 +72,18 @@ pub struct StoreObject {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SendActivity {
     pub activity: Activity,
-    pub target: vocab::Iri,
+    pub inbox: vocab::Iri,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Activity {
     Accept(vocab::Accept),
     CreateNote(vocab::Create<vocab::Note>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Object {
     Note(vocab::Note),
 }
@@ -152,7 +156,8 @@ mod tests {
     #[test]
     fn handle_result_wraps_action_lists() {
         let result = HandleResult::new(Vec::from([Action::StoreFollower(StoreFollower {
-            actor: vocab::Reference::id(iri("https://remote.example/users/bob")),
+            follower: vocab::Reference::id(iri("https://remote.example/users/bob")),
+            following: vocab::Reference::id(iri("https://example.com/users/alice")),
         })]));
 
         assert_eq!(result.actions.len(), 1);
