@@ -31,6 +31,7 @@ impl FederCore {
 
 /// Something entering the portable core from a runtime.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Input {
     ReceivedFollow(vocab::Follow),
     UserCreateNote(UserCreateNote),
