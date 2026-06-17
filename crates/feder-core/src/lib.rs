@@ -38,8 +38,8 @@ impl FederCore {
                 HandleResult::new(actions)
             }
             Input::UserCreateNote(input) => {
-                self.state.record_created_note(input);
-                HandleResult::default()
+                let actions = self.state.record_created_note(input);
+                HandleResult::new(actions)
             }
         }
     }
@@ -179,13 +179,13 @@ impl FederState {
         actions
     }
 
-    fn record_created_note(&mut self, input: UserCreateNote) {
+    fn record_created_note(&mut self, input: UserCreateNote) -> Vec<Action> {
         let Some(actor) = reference_id(&input.actor) else {
-            return;
+            return Vec::new();
         };
 
         if actor != &self.local_actor.id {
-            return;
+            return Vec::new();
         }
 
         let actor = vocab::Reference::id(self.local_actor.id.clone());
@@ -201,8 +201,20 @@ impl FederState {
             vocab::Reference::object(note.clone()),
         );
 
-        self.objects.push(Object::Note(note));
-        self.activities.push(Activity::CreateNote(create));
+        let object = Object::Note(note);
+        self.objects.push(object.clone());
+        self.activities.push(Activity::CreateNote(create.clone()));
+
+        let mut actions = Vec::from([Action::StoreObject(StoreObject { object })]);
+
+        actions.extend(self.delivery_targets.iter().map(|target| {
+            Action::SendActivity(SendActivity {
+                activity: Activity::CreateNote(create.clone()),
+                inbox: target.inbox.clone(),
+            })
+        }));
+
+        actions
     }
 }
 
@@ -527,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn user_create_note_records_created_object_and_activity() {
+    fn user_create_note_records_created_object_and_emits_store_action() {
         let input = UserCreateNote {
             note_id: iri("https://example.com/notes/1"),
             create_id: iri("https://example.com/activities/create/1"),
@@ -539,7 +551,7 @@ mod tests {
         let mut core = core();
         let result = core.handle(Input::UserCreateNote(input));
 
-        assert!(result.is_empty());
+        assert_eq!(result.actions.len(), 1);
         assert_eq!(core.state().objects().len(), 1);
         assert_eq!(core.state().activities().len(), 1);
 
@@ -562,6 +574,110 @@ mod tests {
             }
             Activity::Accept(_) => panic!("expected Create<Note> activity"),
         }
+
+        assert_eq!(
+            result.actions[0],
+            Action::StoreObject(StoreObject {
+                object: Object::Note(note.clone()),
+            })
+        );
+    }
+
+    #[test]
+    fn user_create_note_emits_create_activity_for_known_delivery_targets() {
+        let mut core = core();
+        let follow = vocab::Follow::new(
+            iri("https://remote.example/activities/follow/1"),
+            vocab::Reference::object(actor("https://remote.example/users/bob")),
+            vocab::Reference::id(iri("https://example.com/users/alice")),
+        );
+        let _ = core.handle(received_follow(
+            follow,
+            "https://example.com/activities/accept/1",
+        ));
+
+        let input = UserCreateNote {
+            note_id: iri("https://example.com/notes/1"),
+            create_id: iri("https://example.com/activities/create/1"),
+            actor: vocab::Reference::id(iri("https://example.com/users/alice")),
+            content: "Hello from Feder.".to_string(),
+            published: Some("2026-06-10T00:00:00Z".to_string()),
+        };
+
+        let result = core.handle(Input::UserCreateNote(input));
+
+        assert_eq!(result.actions.len(), 2);
+        let Action::StoreObject(store) = &result.actions[0] else {
+            panic!("expected StoreObject action");
+        };
+        let Object::Note(note) = &store.object;
+        assert_eq!(note.id, iri("https://example.com/notes/1"));
+
+        let Action::SendActivity(send) = &result.actions[1] else {
+            panic!("expected SendActivity action");
+        };
+        assert_eq!(send.inbox, iri("https://remote.example/users/bob/inbox"));
+
+        let Activity::CreateNote(create) = &send.activity else {
+            panic!("expected Create<Note> activity");
+        };
+        assert_eq!(create.id, iri("https://example.com/activities/create/1"));
+        assert_eq!(
+            create.actor,
+            vocab::Reference::id(iri("https://example.com/users/alice"))
+        );
+        let vocab::Reference::Object(created_note) = &create.object else {
+            panic!("expected embedded Note object");
+        };
+        assert_eq!(created_note.id, iri("https://example.com/notes/1"));
+    }
+
+    #[test]
+    fn user_create_note_emits_create_activity_for_each_known_delivery_target() {
+        let mut core = core();
+        for (index, follower) in [
+            "https://remote.example/users/bob",
+            "https://another.example/users/carol",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let follow = vocab::Follow::new(
+                iri(&format!("https://example.com/activities/follow/{index}")),
+                vocab::Reference::object(actor(follower)),
+                vocab::Reference::id(iri("https://example.com/users/alice")),
+            );
+            let _ = core.handle(received_follow(
+                follow,
+                &format!("https://example.com/activities/accept/{index}"),
+            ));
+        }
+
+        let input = UserCreateNote {
+            note_id: iri("https://example.com/notes/1"),
+            create_id: iri("https://example.com/activities/create/1"),
+            actor: vocab::Reference::id(iri("https://example.com/users/alice")),
+            content: "Hello from Feder.".to_string(),
+            published: None,
+        };
+
+        let result = core.handle(Input::UserCreateNote(input));
+
+        assert_eq!(result.actions.len(), 3);
+        assert!(matches!(result.actions[0], Action::StoreObject(_)));
+
+        let expected_inboxes = [
+            iri("https://remote.example/users/bob/inbox"),
+            iri("https://another.example/users/carol/inbox"),
+        ];
+
+        for (action, expected_inbox) in result.actions[1..].iter().zip(expected_inboxes) {
+            let Action::SendActivity(send) = action else {
+                panic!("expected SendActivity action");
+            };
+            assert_eq!(send.inbox, expected_inbox);
+            assert!(matches!(send.activity, Activity::CreateNote(_)));
+        }
     }
 
     #[test]
@@ -580,7 +696,7 @@ mod tests {
         let mut core = core();
         let result = core.handle(Input::UserCreateNote(input));
 
-        assert!(result.is_empty());
+        assert_eq!(result.actions.len(), 1);
 
         let Object::Note(note) = &core.state().objects()[0];
         assert_eq!(
