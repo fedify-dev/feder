@@ -58,7 +58,7 @@ impl FederConfig {
     }
 }
 
-/// In-memory state used by Phase 1 core flows.
+/// In-memory state used by portable core flows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederState {
     local_actor: vocab::Actor,
@@ -111,11 +111,11 @@ impl FederState {
 
     fn record_follow(&mut self, input: ReceivedFollow) -> Vec<Action> {
         let follow = input.follow;
-        let Some(following) = reference_id(&follow.object).cloned() else {
+        let Some(following) = reference_id(&follow.object) else {
             return Vec::new();
         };
 
-        if following != self.local_actor.id {
+        if following != &self.local_actor.id {
             return Vec::new();
         }
 
@@ -125,18 +125,18 @@ impl FederState {
 
         let relation = Follower {
             follower: follower.clone(),
-            following,
+            following: following.clone(),
         };
         let mut actions = Vec::new();
 
         if !self.followers.contains(&relation) {
             self.followers.push(relation.clone());
-        }
 
-        actions.push(Action::StoreFollower(StoreFollower {
-            follower: follow.actor.clone(),
-            following: follow.object.clone(),
-        }));
+            actions.push(Action::StoreFollower(StoreFollower {
+                follower: follow.actor.clone(),
+                following: follow.object.clone(),
+            }));
+        }
 
         let mut inbox = self
             .delivery_targets
@@ -149,15 +149,24 @@ impl FederState {
                 actor: follower,
                 inbox: actor.inbox.clone(),
             };
+            let mut should_store_target = false;
 
             if let Some(existing) = self
                 .delivery_targets
                 .iter_mut()
                 .find(|existing| existing.actor == target.actor)
             {
-                existing.inbox = target.inbox;
+                if existing.inbox != target.inbox {
+                    existing.inbox = target.inbox.clone();
+                    should_store_target = true;
+                }
             } else {
-                self.delivery_targets.push(target);
+                self.delivery_targets.push(target.clone());
+                should_store_target = true;
+            }
+
+            if should_store_target {
+                actions.push(Action::StoreDeliveryTarget(StoreDeliveryTarget { target }));
             }
 
             inbox = Some(actor.inbox.clone());
@@ -277,8 +286,8 @@ pub struct Follower {
 
 /// A known actor inbox for future delivery.
 ///
-/// Phase 1 records this only when an incoming object embeds enough actor data
-/// to expose an inbox. It does not imply every follower has been resolved.
+/// Core records this only when an incoming object embeds enough actor data to
+/// expose an inbox. It does not imply every follower has been resolved.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryTarget {
     pub actor: vocab::Iri,
@@ -290,6 +299,7 @@ pub struct DeliveryTarget {
 #[non_exhaustive]
 pub enum Action {
     StoreFollower(StoreFollower),
+    StoreDeliveryTarget(StoreDeliveryTarget),
     StoreObject(StoreObject),
     SendActivity(SendActivity),
 }
@@ -298,6 +308,11 @@ pub enum Action {
 pub struct StoreFollower {
     pub follower: vocab::Reference<vocab::Actor>,
     pub following: vocab::Reference<vocab::Actor>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoreDeliveryTarget {
+    pub target: DeliveryTarget,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -398,7 +413,7 @@ mod tests {
             "https://example.com/activities/accept/1",
         ));
 
-        assert_eq!(result.actions.len(), 2);
+        assert_eq!(result.actions.len(), 3);
         assert_eq!(
             core.state().followers(),
             &[Follower {
@@ -420,8 +435,17 @@ mod tests {
                 following: vocab::Reference::id(iri("https://example.com/users/alice")),
             })
         );
+        assert_eq!(
+            result.actions[1],
+            Action::StoreDeliveryTarget(StoreDeliveryTarget {
+                target: DeliveryTarget {
+                    actor: iri("https://remote.example/users/bob"),
+                    inbox: iri("https://remote.example/users/bob/inbox"),
+                },
+            })
+        );
 
-        let Action::SendActivity(send) = &result.actions[1] else {
+        let Action::SendActivity(send) = &result.actions[2] else {
             panic!("expected SendActivity action");
         };
         assert_eq!(send.inbox, iri("https://remote.example/users/bob/inbox"));
@@ -469,8 +493,27 @@ mod tests {
             "https://example.com/activities/accept/2",
         ));
 
-        assert_eq!(first_result.actions.len(), 2);
+        assert_eq!(first_result.actions.len(), 3);
         assert_eq!(second_result.actions.len(), 2);
+        assert_eq!(
+            second_result.actions[0],
+            Action::StoreDeliveryTarget(StoreDeliveryTarget {
+                target: DeliveryTarget {
+                    actor: iri("https://remote.example/users/bob"),
+                    inbox: iri("https://remote.example/inboxes/bob"),
+                },
+            })
+        );
+
+        let Action::SendActivity(send) = &second_result.actions[1] else {
+            panic!("expected SendActivity action");
+        };
+        assert_eq!(send.inbox, iri("https://remote.example/inboxes/bob"));
+
+        let Activity::Accept(accept) = &send.activity else {
+            panic!("expected Accept activity");
+        };
+        assert_eq!(accept.id, iri("https://example.com/activities/accept/2"));
 
         assert_eq!(
             core.state().followers(),
@@ -678,6 +721,60 @@ mod tests {
             assert_eq!(send.inbox, expected_inbox);
             assert!(matches!(send.activity, Activity::CreateNote(_)));
         }
+    }
+
+    #[test]
+    fn mocked_core_flow_accepts_follow_then_delivers_created_note() {
+        let mut core = core();
+        let follow = vocab::Follow::new(
+            iri("https://remote.example/activities/follow/1"),
+            vocab::Reference::object(actor("https://remote.example/users/bob")),
+            vocab::Reference::id(iri("https://example.com/users/alice")),
+        );
+
+        let follow_result = core.handle(received_follow(
+            follow,
+            "https://example.com/activities/accept/1",
+        ));
+
+        assert_eq!(follow_result.actions.len(), 3);
+        assert!(matches!(follow_result.actions[0], Action::StoreFollower(_)));
+        assert!(matches!(
+            follow_result.actions[1],
+            Action::StoreDeliveryTarget(_)
+        ));
+        let Action::SendActivity(accept_delivery) = &follow_result.actions[2] else {
+            panic!("expected Accept delivery action");
+        };
+        assert_eq!(
+            accept_delivery.inbox,
+            iri("https://remote.example/users/bob/inbox")
+        );
+        assert!(matches!(accept_delivery.activity, Activity::Accept(_)));
+
+        let create_result = core.handle(Input::UserCreateNote(UserCreateNote {
+            note_id: iri("https://example.com/notes/1"),
+            create_id: iri("https://example.com/activities/create/1"),
+            actor: vocab::Reference::id(iri("https://example.com/users/alice")),
+            content: "Hello from Feder.".to_string(),
+            published: Some("2026-06-10T00:00:00Z".to_string()),
+        }));
+
+        assert_eq!(create_result.actions.len(), 2);
+        assert!(matches!(create_result.actions[0], Action::StoreObject(_)));
+        let Action::SendActivity(create_delivery) = &create_result.actions[1] else {
+            panic!("expected Create<Note> delivery action");
+        };
+        assert_eq!(
+            create_delivery.inbox,
+            iri("https://remote.example/users/bob/inbox")
+        );
+        assert!(matches!(create_delivery.activity, Activity::CreateNote(_)));
+
+        assert_eq!(core.state().followers().len(), 1);
+        assert_eq!(core.state().delivery_targets().len(), 1);
+        assert_eq!(core.state().objects().len(), 1);
+        assert_eq!(core.state().activities().len(), 1);
     }
 
     #[test]
