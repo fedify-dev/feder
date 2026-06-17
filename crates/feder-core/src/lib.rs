@@ -58,7 +58,7 @@ impl FederConfig {
     }
 }
 
-/// In-memory state used by Phase 1 core flows.
+/// In-memory state used by portable core flows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederState {
     local_actor: vocab::Actor,
@@ -277,8 +277,8 @@ pub struct Follower {
 
 /// A known actor inbox for future delivery.
 ///
-/// Phase 1 records this only when an incoming object embeds enough actor data
-/// to expose an inbox. It does not imply every follower has been resolved.
+/// Core records this only when an incoming object embeds enough actor data to
+/// expose an inbox. It does not imply every follower has been resolved.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryTarget {
     pub actor: vocab::Iri,

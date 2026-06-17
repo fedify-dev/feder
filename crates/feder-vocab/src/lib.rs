@@ -20,7 +20,7 @@ pub type Iri = IriString;
 /// A non-scalar ActivityStreams property value.
 ///
 /// ActivityStreams object slots can contain either an embedded object or the
-/// object's IRI. Phase 1 keeps both forms explicit and avoids dereferencing.
+/// object's IRI. Feder keeps both forms explicit and avoids dereferencing.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Reference<T> {
@@ -167,7 +167,7 @@ pub enum ActorType {
     Service,
 }
 
-/// A minimal ActivityPub actor for Phase 1 core tests.
+/// A minimal ActivityPub actor.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Actor {
     #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
