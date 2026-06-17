@@ -111,11 +111,11 @@ impl FederState {
 
     fn record_follow(&mut self, input: ReceivedFollow) -> Vec<Action> {
         let follow = input.follow;
-        let Some(following) = reference_id(&follow.object).cloned() else {
+        let Some(following) = reference_id(&follow.object) else {
             return Vec::new();
         };
 
-        if following != self.local_actor.id {
+        if following != &self.local_actor.id {
             return Vec::new();
         }
 
@@ -125,7 +125,7 @@ impl FederState {
 
         let relation = Follower {
             follower: follower.clone(),
-            following,
+            following: following.clone(),
         };
         let mut actions = Vec::new();
 
@@ -166,9 +166,7 @@ impl FederState {
             }
 
             if should_store_target {
-                actions.push(Action::StoreDeliveryTarget(StoreDeliveryTarget {
-                    target: target.clone(),
-                }));
+                actions.push(Action::StoreDeliveryTarget(StoreDeliveryTarget { target }));
             }
 
             inbox = Some(actor.inbox.clone());
