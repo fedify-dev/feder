@@ -10,6 +10,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "feder-runtime-linux"
+version = "0.1.0"
+dependencies = [
+ "feder-core",
+ "feder-vocab",
+]
+
+[[package]]
 name = "feder-vocab"
 version = "0.1.0"
 dependencies = [

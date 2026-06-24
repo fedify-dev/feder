@@ -2,6 +2,7 @@
 members = [
   "crates/feder-core",
   "crates/feder-vocab",
+  "crates/feder-runtime-linux"
 ]
 resolver = "3"
 

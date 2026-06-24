@@ -1,0 +1,12 @@
+[package]
+name = "feder-runtime-linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+feder-core = { path = "../feder-core" }
+feder-vocab = { path = "../feder-vocab" }
+
+[lints]
+workspace = true
