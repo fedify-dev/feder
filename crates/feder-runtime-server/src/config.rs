@@ -16,14 +16,30 @@
 
 use std::net::SocketAddr;
 
+use feder_vocab::Iri;
+
 pub struct RuntimeConfig {
     pub bind: SocketAddr,
+    pub actor_id: Iri,
+    pub inbox: Iri,
+    pub outbox: Iri,
 }
 
 impl RuntimeConfig {
-    pub fn from_env() -> Result<Self, crate::error::Error> {
-        Ok(Self {
-            bind: "127.0.0.1:3000".parse()?,
-        })
+    pub fn default_local() -> Self {
+        Self {
+            actor_id: "http://127.0.0.1:3000/users/alice"
+                .parse()
+                .expect("valid default actor IRI"),
+            inbox: "http://127.0.0.1:3000/users/alice/inbox"
+                .parse()
+                .expect("valid default inbox IRI"),
+            outbox: "http://127.0.0.1:3000/users/alice/outbox"
+                .parse()
+                .expect("valid default outbox IRI"),
+            bind: "127.0.0.1:3000"
+                .parse()
+                .expect("valid default bind address"),
+        }
     }
 }
