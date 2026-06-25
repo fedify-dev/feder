@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "feder-runtime-linux"
+name = "feder-runtime-server"
 version = "0.1.0"
 dependencies = [
  "feder-core",

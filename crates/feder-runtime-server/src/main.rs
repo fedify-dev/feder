@@ -15,5 +15,5 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 fn main() {
-    println!("feder-runtime-linux starting")
+    println!("feder-runtime-server starting")
 }
