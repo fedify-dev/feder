@@ -14,6 +14,16 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod app;
-pub mod config;
-pub mod error;
+use std::net::SocketAddr;
+
+pub struct RuntimeConfig {
+    pub bind: SocketAddr,
+}
+
+impl RuntimeConfig {
+    pub fn from_env() -> Result<Self, crate::error::Error> {
+        Ok(Self {
+            bind: "127.0.0.1:3000".parse()?,
+        })
+    }
+}

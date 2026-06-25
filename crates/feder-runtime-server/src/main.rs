@@ -14,6 +14,15 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-fn main() {
-    println!("feder-runtime-server starting")
+use feder_runtime_server::{app::build_router, config::RuntimeConfig, error::Error};
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    let config = RuntimeConfig::from_env()?;
+    let app = build_router(&config)?;
+
+    let listener = tokio::net::TcpListener::bind(config.bind).await?;
+    axum::serve(listener, app).await?;
+
+    Ok(())
 }

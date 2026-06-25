@@ -14,6 +14,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod app;
-pub mod config;
-pub mod error;
+use crate::config::RuntimeConfig;
+use axum::{Router, routing::get};
+
+pub fn build_router(_config: &RuntimeConfig) -> Result<Router, crate::error::Error> {
+    Ok(Router::new().route("/healthz", get(healthz)))
+}
+
+async fn healthz() -> &'static str {
+    "ok"
+}
