@@ -19,7 +19,7 @@ use feder_runtime_server::{app::build_router, config::RuntimeConfig, error::Erro
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let config = RuntimeConfig::default_local();
-    let app = build_router(&config)?;
+    let app = build_router(&config);
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     axum::serve(listener, app).await?;

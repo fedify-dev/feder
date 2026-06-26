@@ -14,11 +14,40 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::sync::{Arc, Mutex};
+
 use crate::config::RuntimeConfig;
 use axum::{Router, routing::get};
+use feder_core::{FederConfig, FederCore};
+use feder_vocab::Actor;
 
-pub fn build_router(_config: &RuntimeConfig) -> Result<Router, crate::error::Error> {
-    Ok(Router::new().route("/healthz", get(healthz)))
+#[derive(Clone)]
+pub struct AppState {
+    pub core: Arc<Mutex<FederCore>>,
+}
+
+impl AppState {
+    pub fn from_config(config: &RuntimeConfig) -> Self {
+        let actor = Actor::person(
+            config.actor_id.clone(),
+            config.inbox.clone(),
+            config.outbox.clone(),
+        );
+
+        let core = FederCore::new(FederConfig::new(actor));
+
+        Self {
+            core: Arc::new(Mutex::new(core)),
+        }
+    }
+}
+
+pub fn build_router(config: &RuntimeConfig) -> Router {
+    let state = AppState::from_config(config);
+
+    Router::new()
+        .route("/healthz", get(healthz))
+        .with_state(state)
 }
 
 async fn healthz() -> &'static str {
