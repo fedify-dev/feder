@@ -18,16 +18,17 @@ use feder_runtime_server::{app::build_router, config::RuntimeConfig, error::Erro
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let config = RuntimeConfig::default_local();
-    let app = build_router(&config);
-
-    let listener = tokio::net::TcpListener::bind(config.bind).await?;
-    axum::serve(listener, app).await?;
-
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    tracing::info!(bind = %&config.bind, actor = %&config.actor_id, "Starting Feder runtime");
+
+    let config = RuntimeConfig::default_local();
+    let app = build_router(&config);
+
+    tracing::info!(bind = %&config.bind, actor = %&config.actor_id, "starting Feder runtime");
+
+    let listener = tokio::net::TcpListener::bind(config.bind).await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }
