@@ -11,8 +11,22 @@ storage, signing, and delivery are intentionally left to later issues.
 Run
 ---
 
+On Unix shells:
+
 ~~~~ sh
 RUST_LOG=info cargo run -p feder-runtime-server
+~~~~
+
+On PowerShell:
+
+~~~~ powershell
+$env:RUST_LOG = "info"; cargo run -p feder-runtime-server
+~~~~
+
+On cmd.exe:
+
+~~~~ bat
+set RUST_LOG=info && cargo run -p feder-runtime-server
 ~~~~
 
 The default local actor is:
