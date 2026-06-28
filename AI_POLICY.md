@@ -10,9 +10,8 @@ The Feder project has the following rules for AI usage:
 
  -  *All AI usage in any form must be disclosed.*  You must state the tool you
     used (e.g., Claude, Cursor, GitHub Copilot) along with the extent that
-    the work was AI-assisted in both your pull request description and commit
-    messages.  For commit messages, use the `Assisted-by` trailer (see below
-    for the required format).
+    the work was AI-assisted in commit messages.  Use the `Assisted-by` trailer
+    (see below for the required format).
 
  -  *Pull requests created in any way by AI can only be for accepted issues.*
     Drive-by pull requests that do not reference an accepted issue will be
