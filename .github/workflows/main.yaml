@@ -20,3 +20,18 @@ jobs:
         key: rustup-v1-${{ runner.os }}-${{ hashFiles('mise.toml') }}
     - uses: jdx/mise-action@v4
     - run: mise run check
+
+  cross-platform:
+    name: cargo test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - ubuntu-latest
+        - macos-latest
+        - windows-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+    - run: cargo test --workspace
