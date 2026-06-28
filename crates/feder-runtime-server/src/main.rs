@@ -26,8 +26,10 @@ async fn main() -> Result<(), Error> {
 
     tracing::info!(bind = %&config.bind, actor = %&config.actor_id, "starting Feder runtime");
 
-    let listener = tokio::net::TcpListener::bind(config.bind).await?;
-    axum::serve(listener, app).await?;
+    let listener = tokio::net::TcpListener::bind(config.bind)
+        .await
+        .map_err(Error::Bind)?;
+    axum::serve(listener, app).await.map_err(Error::Serve)?;
 
     Ok(())
 }

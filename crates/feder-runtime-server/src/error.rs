@@ -13,4 +13,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("failed to bind server socket")]
+    Bind(#[source] std::io::Error),
+
+    #[error("server failed")]
+    Serve(#[source] std::io::Error),
+}
