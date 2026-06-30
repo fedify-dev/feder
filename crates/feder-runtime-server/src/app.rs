@@ -16,13 +16,17 @@
 use std::sync::{Arc, Mutex};
 
 use crate::config::RuntimeConfig;
+use crate::webfinger::webfinger;
 use axum::{Router, http::StatusCode, routing::get};
 use feder_core::{FederConfig, FederCore};
-use feder_vocab::Actor;
+use feder_vocab::{Actor, Iri};
 
 #[derive(Clone)]
 pub struct AppState {
     pub core: Arc<Mutex<FederCore>>,
+    pub actor_id: Iri,
+    pub username: String,
+    pub handle_host: String,
 }
 
 impl AppState {
@@ -37,6 +41,9 @@ impl AppState {
 
         Self {
             core: Arc::new(Mutex::new(core)),
+            actor_id: config.actor_id.clone(),
+            username: config.username.clone(),
+            handle_host: config.handle_host.clone(),
         }
     }
 }
@@ -46,6 +53,7 @@ pub fn build_router(config: &RuntimeConfig) -> Router {
 
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/.well-known/webfinger", get(webfinger))
         .with_state(state)
 }
 

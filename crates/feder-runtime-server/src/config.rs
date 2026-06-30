@@ -22,6 +22,8 @@ pub struct RuntimeConfig {
     pub actor_id: Iri,
     pub inbox: Iri,
     pub outbox: Iri,
+    pub username: String,
+    pub handle_host: String,
 }
 
 impl RuntimeConfig {
@@ -39,6 +41,8 @@ impl RuntimeConfig {
             bind: "127.0.0.1:3000"
                 .parse()
                 .expect("valid default bind address"),
+            username: "alice".to_string(),
+            handle_host: "127.0.0.1:3000".to_string(),
         }
     }
 }

@@ -95,6 +95,7 @@ dependencies = [
  "axum",
  "feder-core",
  "feder-vocab",
+ "serde",
  "thiserror",
  "tokio",
  "tracing",
