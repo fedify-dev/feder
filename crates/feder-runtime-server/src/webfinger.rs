@@ -14,9 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use axum::{
-    Json,
-    extract::{Query, State},
-    http::StatusCode,
+    Json, extract::{Query, State}, http::{StatusCode, header}, response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 
@@ -44,7 +42,7 @@ pub struct WebFingerLink {
 pub async fn webfinger(
     State(state): State<AppState>,
     Query(query): Query<WebFingerQuery>,
-) -> Result<Json<WebFingerResponse>, StatusCode> {
+) -> Result<Response, StatusCode> {
     let Some(resource) = query.resource else {
         return Err(StatusCode::BAD_REQUEST);
     };
@@ -56,7 +54,9 @@ pub async fn webfinger(
 
     let actor_id = state.actor_id.to_string();
 
-    Ok(Json(WebFingerResponse {
+    Ok((
+        [(header::CONTENT_TYPE, "application/jrd+json")],
+        Json(WebFingerResponse {
         subject: resource,
         aliases: vec![actor_id.clone()],
         links: vec![WebFingerLink {
@@ -64,5 +64,6 @@ pub async fn webfinger(
             media_type: "application/activity+json",
             href: actor_id,
         }],
-    }))
+    }),
+        ).into_response())
 }
