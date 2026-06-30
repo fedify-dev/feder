@@ -14,5 +14,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+tower = "0.5"
+
 [lints]
 workspace = true
