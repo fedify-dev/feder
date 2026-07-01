@@ -56,7 +56,7 @@ pub async fn webfinger(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    let actor_id = state.actor_id.to_string();
+    let actor_id = state.local_actor.id.to_string();
 
     Ok((
         [(header::CONTENT_TYPE, "application/jrd+json")],

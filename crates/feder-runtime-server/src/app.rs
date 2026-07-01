@@ -15,33 +15,36 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::actor::actor;
 use crate::config::RuntimeConfig;
 use crate::webfinger::webfinger;
 use axum::{Router, http::StatusCode, routing::get};
 use feder_core::{FederConfig, FederCore};
-use feder_vocab::{Actor, Iri};
+use feder_vocab::Actor;
 
 #[derive(Clone)]
 pub struct AppState {
     pub core: Arc<Mutex<FederCore>>,
-    pub actor_id: Iri,
+    pub local_actor: Actor,
     pub username: String,
     pub handle_host: String,
 }
 
 impl AppState {
     pub fn from_config(config: &RuntimeConfig) -> Self {
-        let actor = Actor::person(
+        let mut actor = Actor::person(
             config.actor_id.clone(),
             config.inbox.clone(),
             config.outbox.clone(),
         );
+        actor.preferred_username = Some(config.preferred_username.clone());
+        actor.name = Some(config.username.clone());
 
-        let core = FederCore::new(FederConfig::new(actor));
+        let core = FederCore::new(FederConfig::new(actor.clone()));
 
         Self {
             core: Arc::new(Mutex::new(core)),
-            actor_id: config.actor_id.clone(),
+            local_actor: actor,
             username: config.username.clone(),
             handle_host: config.handle_host.clone(),
         }
@@ -54,6 +57,7 @@ pub fn build_router(config: &RuntimeConfig) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/.well-known/webfinger", get(webfinger))
+        .route("/users/{username}", get(actor))
         .with_state(state)
 }
 
