@@ -40,3 +40,67 @@ pub async fn note(
     )
         .into_response())
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    use crate::{app::build_router, config::RuntimeConfig};
+
+    #[tokio::test]
+    async fn returns_public_note() {
+        let app = build_router(&RuntimeConfig::default_local());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/notes/1")
+                    .body(Body::empty())
+                    .expect("valid request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/activity+json"
+        );
+
+        let body = to_bytes(response.into_body(), 2048)
+            .await
+            .expect("read response body");
+        let json: Value = serde_json::from_slice(&body).expect("valid json");
+
+        assert_eq!(json["@context"], "https://www.w3.org/ns/activitystreams");
+        assert_eq!(json["type"], "Note");
+        assert_eq!(json["id"], "http://127.0.0.1:3000/notes/1");
+        assert_eq!(json["attributedTo"], "http://127.0.0.1:3000/users/alice");
+        assert_eq!(
+            json["content"],
+            "Hello, World! This is Feder, a portable AP core for many runtimes."
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_unknown_note() {
+        let app = build_router(&RuntimeConfig::default_local());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/notes/missing")
+                    .body(Body::empty())
+                    .expect("valid request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
