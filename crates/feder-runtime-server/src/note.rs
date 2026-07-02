@@ -13,9 +13,30 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod actor;
-pub mod app;
-pub mod config;
-pub mod error;
-pub mod note;
-pub mod webfinger;
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
+};
+
+use crate::app::AppState;
+
+pub async fn note(
+    State(app_state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, StatusCode> {
+    // TODO(#25): Replace this seeded preview note with durable runtime storage.
+    let note = app_state
+        .notes
+        .iter()
+        .find(|note| note.id.as_str() == format!("http://{}/notes/{id}", app_state.handle_host))
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok((
+        [(header::CONTENT_TYPE, "application/activity+json")],
+        Json(note),
+    )
+        .into_response())
+}

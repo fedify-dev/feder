@@ -15,12 +15,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::actor::actor;
 use crate::config::RuntimeConfig;
 use crate::webfinger::webfinger;
+use crate::{actor::actor, note::note};
 use axum::{Router, http::StatusCode, routing::get};
 use feder_core::{FederConfig, FederCore};
-use feder_vocab::Actor;
+use feder_vocab::{Actor, Note, Reference};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -28,6 +28,8 @@ pub struct AppState {
     pub local_actor: Actor,
     pub username: String,
     pub handle_host: String,
+    // TODO(#25): Replace this seeded preview note with durable runtime storage.
+    pub notes: Vec<Note>,
 }
 
 impl AppState {
@@ -40,6 +42,13 @@ impl AppState {
         actor.preferred_username = Some(config.preferred_username.clone());
         actor.name = Some(config.username.clone());
 
+        // TODO(#25): Replace this seeded preview note with durable runtime storage.
+        let mut note = Note::new(config.note_id.clone());
+        note.attributed_to = Some(Reference::id(config.actor_id.clone()));
+        note.content =
+            Some("Hello, World! This is Feder, a portable AP core for many runtimes.".to_string());
+        let notes = vec![note];
+
         let core = FederCore::new(FederConfig::new(actor.clone()));
 
         Self {
@@ -47,6 +56,7 @@ impl AppState {
             local_actor: actor,
             username: config.username.clone(),
             handle_host: config.handle_host.clone(),
+            notes,
         }
     }
 }
@@ -58,6 +68,7 @@ pub fn build_router(config: &RuntimeConfig) -> Router {
         .route("/healthz", get(healthz))
         .route("/.well-known/webfinger", get(webfinger))
         .route("/users/{username}", get(actor))
+        .route("/notes/{id}", get(note))
         .with_state(state)
 }
 
