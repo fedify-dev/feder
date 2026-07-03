@@ -16,7 +16,7 @@ serde.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
-tower = "0.5"
+tower.workspace = true
 
 [lints]
 workspace = true
