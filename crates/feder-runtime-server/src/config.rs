@@ -23,34 +23,23 @@ pub struct RuntimeConfig {
     pub inbox: Iri,
     pub outbox: Iri,
     pub username: String,
-    pub preferred_username: String,
     pub handle_host: String,
-    // TODO(#25): Replace this seeded preview note with durable runtime storage.
-    pub note_id: Iri,
 }
 
-impl RuntimeConfig {
-    pub fn default_local() -> Self {
-        Self {
-            actor_id: "http://127.0.0.1:3000/users/alice"
-                .parse()
-                .expect("valid default actor IRI"),
-            inbox: "http://127.0.0.1:3000/users/alice/inbox"
-                .parse()
-                .expect("valid default inbox IRI"),
-            outbox: "http://127.0.0.1:3000/users/alice/outbox"
-                .parse()
-                .expect("valid default outbox IRI"),
-            bind: "127.0.0.1:3000"
-                .parse()
-                .expect("valid default bind address"),
-            username: "alice".to_string(),
-            preferred_username: "alice".to_string(),
-            handle_host: "127.0.0.1:3000".to_string(),
-            // TODO(#25): Replace this seeded preview note with durable runtime storage.
-            note_id: "http://127.0.0.1:3000/notes/1"
-                .parse()
-                .expect("valid default note IRI"),
-        }
+#[cfg(test)]
+pub(crate) fn test_config() -> RuntimeConfig {
+    RuntimeConfig {
+        actor_id: "http://127.0.0.1:3000/users/alice"
+            .parse()
+            .expect("valid actor IRI"),
+        inbox: "http://127.0.0.1:3000/users/alice/inbox"
+            .parse()
+            .expect("valid inbox IRI"),
+        outbox: "http://127.0.0.1:3000/users/alice/outbox"
+            .parse()
+            .expect("valid outbox IRI"),
+        bind: "127.0.0.1:3000".parse().expect("valid bind address"),
+        username: "alice".to_string(),
+        handle_host: "127.0.0.1:3000".to_string(),
     }
 }

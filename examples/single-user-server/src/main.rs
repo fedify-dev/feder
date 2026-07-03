@@ -13,7 +13,26 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use feder_runtime_server::{app::build_router, config::RuntimeConfig, error::Error};
+use feder_runtime_server::{Error, RuntimeConfig, build_router};
+
+fn default_local() -> RuntimeConfig {
+    RuntimeConfig {
+        bind: "127.0.0.1:3000"
+            .parse()
+            .expect("valid default bind address"),
+        actor_id: "http://127.0.0.1:3000/users/alice"
+            .parse()
+            .expect("valid default actor IRI"),
+        inbox: "http://127.0.0.1:3000/users/alice/inbox"
+            .parse()
+            .expect("valid default inbox IRI"),
+        outbox: "http://127.0.0.1:3000/users/alice/outbox"
+            .parse()
+            .expect("valid default outbox IRI"),
+        username: "alice".to_string(),
+        handle_host: "127.0.0.1:3000".to_string(),
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -21,12 +40,14 @@ async fn main() -> Result<(), Error> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let config = RuntimeConfig::default_local();
-    let app = build_router(&config);
+    let config = default_local();
+    let bind = config.bind;
+    let actor_id = config.actor_id.clone();
+    let app = build_router(config);
 
-    tracing::info!(bind = %&config.bind, actor = %&config.actor_id, "starting Feder runtime");
+    tracing::info!(bind = %bind, actor = %actor_id, "starting Feder single-user example");
 
-    let listener = tokio::net::TcpListener::bind(config.bind)
+    let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(Error::Bind)?;
     axum::serve(listener, app).await.map_err(Error::Serve)?;

@@ -15,12 +15,12 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::actor::actor;
 use crate::config::RuntimeConfig;
 use crate::webfinger::webfinger;
-use crate::{actor::actor, note::note};
 use axum::{Router, http::StatusCode, routing::get};
 use feder_core::{FederConfig, FederCore};
-use feder_vocab::{Actor, Note, Reference};
+use feder_vocab::Actor;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -28,50 +28,63 @@ pub struct AppState {
     pub local_actor: Actor,
     pub username: String,
     pub handle_host: String,
-    // TODO(#25): Replace this seeded preview note with durable runtime storage.
-    pub notes: Vec<Note>,
 }
 
 impl AppState {
-    pub fn from_config(config: &RuntimeConfig) -> Self {
-        let mut actor = Actor::person(
-            config.actor_id.clone(),
-            config.inbox.clone(),
-            config.outbox.clone(),
-        );
-        actor.preferred_username = Some(config.preferred_username.clone());
+    pub fn from_config(config: RuntimeConfig) -> Self {
+        let mut actor = Actor::person(config.actor_id, config.inbox, config.outbox);
+        actor.preferred_username = Some(config.username.clone());
         actor.name = Some(config.username.clone());
-
-        // TODO(#25): Replace this seeded preview note with durable runtime storage.
-        let mut note = Note::new(config.note_id.clone());
-        note.attributed_to = Some(Reference::id(config.actor_id.clone()));
-        note.content =
-            Some("Hello, World! This is Feder, a portable AP core for many runtimes.".to_string());
-        let notes = vec![note];
 
         let core = FederCore::new(FederConfig::new(actor.clone()));
 
         Self {
             core: Arc::new(Mutex::new(core)),
             local_actor: actor,
-            username: config.username.clone(),
-            handle_host: config.handle_host.clone(),
-            notes,
+            username: config.username,
+            handle_host: config.handle_host,
         }
     }
 }
 
-pub fn build_router(config: &RuntimeConfig) -> Router {
+pub fn build_router(config: RuntimeConfig) -> Router {
     let state = AppState::from_config(config);
 
     Router::new()
         .route("/healthz", get(healthz))
         .route("/.well-known/webfinger", get(webfinger))
         .route("/users/{username}", get(actor))
-        .route("/notes/{id}", get(note))
         .with_state(state)
 }
 
 async fn healthz() -> StatusCode {
     StatusCode::NO_CONTENT
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    use crate::{build_router, config::test_config};
+
+    #[tokio::test]
+    async fn returns_health_check() {
+        let app = build_router(test_config());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .expect("valid request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
 }

@@ -3,6 +3,7 @@ members = [
   "crates/feder-core",
   "crates/feder-vocab",
   "crates/feder-runtime-server",
+  "examples/single-user-server",
 ]
 resolver = "3"
 
