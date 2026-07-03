@@ -27,10 +27,11 @@ pub async fn note(
     Path(id): Path<String>,
 ) -> Result<Response, StatusCode> {
     // TODO(#25): Replace this seeded preview note with durable runtime storage.
+    let expected_suffix = format!("/notes/{id}");
     let note = app_state
         .notes
         .iter()
-        .find(|note| note.id.as_str() == format!("http://{}/notes/{id}", app_state.handle_host))
+        .find(|note| note.id.as_str().ends_with(&expected_suffix))
         .cloned()
         .ok_or(StatusCode::NOT_FOUND)?;
 
