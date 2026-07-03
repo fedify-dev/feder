@@ -95,8 +95,11 @@ dependencies = [
  "axum",
  "feder-core",
  "feder-vocab",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

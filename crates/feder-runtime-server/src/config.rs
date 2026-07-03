@@ -22,6 +22,11 @@ pub struct RuntimeConfig {
     pub actor_id: Iri,
     pub inbox: Iri,
     pub outbox: Iri,
+    pub username: String,
+    pub preferred_username: String,
+    pub handle_host: String,
+    // TODO(#25): Replace this seeded preview note with durable runtime storage.
+    pub note_id: Iri,
 }
 
 impl RuntimeConfig {
@@ -39,6 +44,13 @@ impl RuntimeConfig {
             bind: "127.0.0.1:3000"
                 .parse()
                 .expect("valid default bind address"),
+            username: "alice".to_string(),
+            preferred_username: "alice".to_string(),
+            handle_host: "127.0.0.1:3000".to_string(),
+            // TODO(#25): Replace this seeded preview note with durable runtime storage.
+            note_id: "http://127.0.0.1:3000/notes/1"
+                .parse()
+                .expect("valid default note IRI"),
         }
     }
 }
