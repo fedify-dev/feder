@@ -23,3 +23,7 @@ run = [
 [tasks.fmt]
 description = "Format code and docs"
 run = ["cargo fmt", "hongdown --write", "mise fmt"]
+
+[tasks.test]
+description = "Run the Rust tests"
+run = "cargo test"

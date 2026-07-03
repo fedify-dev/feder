@@ -1,0 +1,22 @@
+[package]
+name = "feder-runtime-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+feder-core = { path = "../feder-core" }
+feder-vocab = { path = "../feder-vocab" }
+axum = "0.8"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tower.workspace = true
+
+[lints]
+workspace = true
