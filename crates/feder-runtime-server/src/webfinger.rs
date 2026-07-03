@@ -82,13 +82,13 @@ mod tests {
     use serde_json::Value;
     use tower::ServiceExt;
 
-    use crate::{app::build_router, config::RuntimeConfig};
+    use crate::{build_router, config::test_config};
 
     const WEBFINGER_PATH: &str = "/.well-known/webfinger?resource=acct:alice@127.0.0.1:3000";
 
     #[tokio::test]
     async fn returns_webfinger_descriptor_for_local_actor() {
-        let app = build_router(&RuntimeConfig::default_local());
+        let app = build_router(test_config());
 
         let response = app
             .oneshot(
@@ -123,7 +123,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_missing_resource() {
-        let app = build_router(&RuntimeConfig::default_local());
+        let app = build_router(test_config());
 
         let response = app
             .oneshot(
@@ -140,7 +140,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_non_local_actor_resource() {
-        let app = build_router(&RuntimeConfig::default_local());
+        let app = build_router(test_config());
 
         let response = app
             .oneshot(
