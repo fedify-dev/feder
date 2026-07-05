@@ -1,12 +1,16 @@
 [package]
 name = "feder-runtime-server"
+description = "Runnable server runtime for Feder on standard operating systems."
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
-feder-core = { path = "../feder-core" }
-feder-vocab = { path = "../feder-vocab" }
+feder-core.workspace = true
+feder-vocab.workspace = true
 axum = "0.8"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
