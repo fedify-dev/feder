@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use crate::actor::actor;
 use crate::config::RuntimeConfig;
 use crate::webfinger::webfinger;
-use axum::{Router, http::StatusCode, routing::get};
+use axum::{Router, extract::DefaultBodyLimit, http::StatusCode, routing::get};
 use feder_core::{FederConfig, FederCore};
 use feder_vocab::Actor;
 
@@ -55,6 +55,7 @@ pub fn build_router(config: RuntimeConfig) -> Router {
         .route("/.well-known/webfinger", get(webfinger))
         .route("/users/{username}", get(actor))
         .route("/users/{identifier}/inbox", post(inbox))
+    .layer(DefaultBodyLimit::max(1_048_576))
         .with_state(state)
 }
 
