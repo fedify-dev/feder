@@ -17,6 +17,7 @@ pub mod actor;
 pub mod app;
 pub mod config;
 pub mod error;
+pub mod inbox;
 pub mod webfinger;
 
 pub use app::{AppState, build_router};

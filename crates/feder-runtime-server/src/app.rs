@@ -54,6 +54,7 @@ pub fn build_router(config: RuntimeConfig) -> Router {
         .route("/healthz", get(healthz))
         .route("/.well-known/webfinger", get(webfinger))
         .route("/users/{username}", get(actor))
+        .route("/users/{identifier}/inbox", post(inbox))
         .with_state(state)
 }
 
