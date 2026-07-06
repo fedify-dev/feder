@@ -12,6 +12,7 @@ handle hosts.
 ActivityPub inbox handling, storage, signing, and delivery are intentionally
 left to later issues.
 
+
 Example
 -------
 
@@ -35,6 +36,7 @@ let config = RuntimeConfig {
 
 let app = build_router(config);
 ~~~~
+
 
 Demo
 ----
