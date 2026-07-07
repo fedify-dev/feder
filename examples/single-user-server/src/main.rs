@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use feder_runtime_server::{Error, RuntimeConfig, build_router};
+use feder_runtime_server::{Error, InboxAuthPolicy, RuntimeConfig, build_router};
 
 fn default_local() -> RuntimeConfig {
     RuntimeConfig {
@@ -31,6 +31,7 @@ fn default_local() -> RuntimeConfig {
             .expect("valid default outbox IRI"),
         username: "alice".to_string(),
         handle_host: "127.0.0.1:3000".to_string(),
+        inbox_auth_policy: InboxAuthPolicy::AllowUnsignedInsecureDev,
     }
 }
 
