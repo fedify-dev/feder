@@ -21,5 +21,5 @@ pub mod inbox;
 pub mod webfinger;
 
 pub use app::{AppState, build_router};
-pub use config::RuntimeConfig;
+pub use config::{InboxAuthPolicy, RuntimeConfig};
 pub use error::Error;

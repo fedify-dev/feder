@@ -25,6 +25,7 @@ use feder_vocab::Follow;
 use serde_json::{Value, from_slice, from_value};
 
 use crate::app::AppState;
+use crate::config::InboxAuthPolicy;
 
 pub struct InboxRequest {
     pub username: String,
@@ -46,6 +47,13 @@ fn accept_id_for_follow(
     format!("{local_actor_id}#accepts/{encoded_follow_id}")
         .parse()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn verify_inbox_request(app_state: &AppState, _req: &InboxRequest) -> Result<(), StatusCode> {
+    match app_state.inbox_auth_policy {
+        InboxAuthPolicy::AllowUnsignedInsecureDev => Ok(()),
+        InboxAuthPolicy::RequireSigned => Err(StatusCode::UNAUTHORIZED),
+    }
 }
 
 pub async fn inbox(
@@ -77,6 +85,8 @@ pub async fn inbox(
         uri,
         body,
     };
+
+    verify_inbox_request(&app_state, &req)?;
 
     let value: Value = from_slice(&req.body).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -111,7 +121,11 @@ mod tests {
     use serde_json::json;
     use tower::ServiceExt;
 
-    use crate::{app::AppState, build_router, config::test_config};
+    use crate::{
+        app::AppState,
+        build_router,
+        config::{InboxAuthPolicy, test_config},
+    };
 
     use super::inbox;
 
@@ -186,6 +200,33 @@ mod tests {
         assert_eq!(
             core.state().delivery_targets()[0].inbox.as_str(),
             "https://remote.example/users/bob/inbox"
+        );
+    }
+
+    #[tokio::test]
+    async fn require_signed_rejects_unsigned_follow_before_core() {
+        let mut config = test_config();
+        config.inbox_auth_policy = InboxAuthPolicy::RequireSigned;
+        let app_state = AppState::from_config(config);
+
+        let error = post_inbox(
+            app_state.clone(),
+            "alice",
+            activity_json_headers(),
+            follow_body(),
+        )
+        .await
+        .expect_err("unsigned follow should be rejected");
+
+        assert_eq!(error, StatusCode::UNAUTHORIZED);
+        assert!(
+            app_state
+                .core
+                .lock()
+                .expect("core lock")
+                .state()
+                .followers()
+                .is_empty()
         );
     }
 

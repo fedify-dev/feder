@@ -17,6 +17,12 @@ use std::net::SocketAddr;
 
 use feder_vocab::Iri;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InboxAuthPolicy {
+    RequireSigned,
+    AllowUnsignedInsecureDev,
+}
+
 pub struct RuntimeConfig {
     pub bind: SocketAddr,
     pub actor_id: Iri,
@@ -24,6 +30,7 @@ pub struct RuntimeConfig {
     pub outbox: Iri,
     pub username: String,
     pub handle_host: String,
+    pub inbox_auth_policy: InboxAuthPolicy,
 }
 
 #[cfg(test)]
@@ -41,5 +48,6 @@ pub(crate) fn test_config() -> RuntimeConfig {
         bind: "127.0.0.1:3000".parse().expect("valid bind address"),
         username: "alice".to_string(),
         handle_host: "127.0.0.1:3000".to_string(),
+        inbox_auth_policy: InboxAuthPolicy::AllowUnsignedInsecureDev,
     }
 }
