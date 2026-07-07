@@ -95,6 +95,7 @@ dependencies = [
  "axum",
  "feder-core",
  "feder-vocab",
+ "percent-encoding",
  "serde",
  "serde_json",
  "thiserror",

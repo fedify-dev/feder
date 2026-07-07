@@ -293,6 +293,12 @@ pub struct UserCreateNote {
     pub published: Option<String>,
 }
 
+impl Input {
+    pub fn received_follow(follow: vocab::Follow, accept_id: vocab::Iri) -> Self {
+        Self::ReceivedFollow(ReceivedFollow { follow, accept_id })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Follower {
     pub follower: vocab::Iri,
