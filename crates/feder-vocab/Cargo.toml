@@ -1,8 +1,12 @@
 [package]
 name = "feder-vocab"
+description = "Minimal ActivityPub and Activity Streams 2.0 vocabulary types for Feder."
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
 iri-string.workspace = true

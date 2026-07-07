@@ -9,9 +9,17 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+authors = ["Jiwon Kwon <work@kwonjiwon.org>"]
 license = "AGPL-3.0-only"
+homepage = "https://feder.rs/"
+repository = "https://github.com/fedify-dev/feder"
 
 [workspace.dependencies]
+# Keep workspace crate versions in sync with [workspace.package].version.
+# Use `mise run bump-execute <version>` instead of editing these by hand.
+feder-core = { version = "0.1.0", path = "crates/feder-core" }
+feder-runtime-server = { version = "0.1.0", path = "crates/feder-runtime-server" }
+feder-vocab = { version = "0.1.0", path = "crates/feder-vocab" }
 iri-string = { version = "0.7.12", default-features = false, features = ["alloc", "serde"] }
 serde = { version = "1.0.219", default-features = false, features = ["alloc", "derive"] }
 serde_json = "1.0.140"

@@ -1,10 +1,14 @@
+[tools]
+"github:crate-ci/cargo-release" = "1.1.2"
+"aqua:nushell/nushell" = "0.113.0"
+
 [tools.rust]
 version = "1.95.0"
 profile = "default"
 components = "rust-analyzer,rustfmt,clippy"
 
 [tools."github:dahlia/hongdown"]
-version = "0.3.11"
+version = "0.5.1"
 
 [tools."github:dahlia/hongdown".platforms]
 linux-x64 = "hongdown-*-x86_64-unknown-linux-musl.tar.bz2"
@@ -26,4 +30,41 @@ run = ["cargo fmt", "hongdown --write", "mise fmt"]
 
 [tasks.test]
 description = "Run the Rust tests"
-run = "cargo test"
+run = "cargo test --workspace"
+
+[tasks.bump]
+description = "Preview a workspace version bump"
+usage = 'arg "<version>" help="Target release version, e.g. 1.2.5"'
+run = 'cargo release --workspace --no-publish --no-tag --no-push "$usage_version"'
+
+[tasks.bump-execute]
+description = "Create one commit bumping the workspace version"
+usage = 'arg "<version>" help="Target release version, e.g. 1.2.5"'
+run = 'cargo release --workspace --no-publish --no-tag --no-push --execute --no-confirm "$usage_version"'
+
+[tasks.publish-version]
+description = "Restamp Cargo manifests for a CI publish version"
+usage = 'arg "<version>" help="Exact package version to publish"'
+shell = "nu -c"
+run = """
+let publish_version = $env.usage_version
+let dependency_version = ($publish_version | split row "+" | first)
+let crate_names = (
+  cargo metadata --no-deps --format-version 1
+  | from json
+  | get packages.name
+)
+
+let manifest = (
+  open Cargo.toml
+  | upsert workspace.package.version $publish_version
+)
+let manifest = (
+  $crate_names
+  | reduce --fold $manifest {|crate, acc|
+      $acc | upsert (["workspace" "dependencies" $crate "version"] | into cell-path) $dependency_version
+    }
+)
+
+($manifest | to toml) + "\n" | save --force Cargo.toml
+"""

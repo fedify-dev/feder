@@ -14,15 +14,16 @@ jobs:
     # Work around jdx/mise-action not caching ~/.rustup alongside
     # ~/.local/share/mise, which causes Rust components (e.g. clippy) to go
     # missing on cache hits.  See: https://github.com/jdx/mise-action/issues/215
-    - uses: actions/cache@v5
+    - &cache-rustup
+      uses: actions/cache@v5
       with:
         path: ~/.rustup/toolchains
         key: rustup-v1-${{ runner.os }}-${{ hashFiles('mise.toml') }}
-    - uses: jdx/mise-action@v4
+    - &setup-mise
+      uses: jdx/mise-action@v4
     - run: mise run check
 
-  cross-platform:
-    name: cargo test (${{ matrix.os }})
+  test:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -33,5 +34,48 @@ jobs:
         - windows-latest
     steps:
     - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
-    - run: cargo test --workspace
+    - *cache-rustup
+    - *setup-mise
+    - run: mise run test
+
+  publish:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs:
+    - check
+    - test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+    - *cache-rustup
+    - *setup-mise
+    - shell: bash
+      run: |
+        set -euo pipefail
+
+        workspace_version="$(nu -c 'open Cargo.toml | get workspace.package.version')"
+        if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+          if [[ "$GITHUB_REF_NAME" != "$workspace_version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match workspace package version $workspace_version"
+            exit 1
+          fi
+          publish_version="$workspace_version"
+        else
+          short_sha="$(git rev-parse --short "$GITHUB_SHA")"
+          publish_version="${workspace_version}-dev.${GITHUB_RUN_NUMBER}+${short_sha}"
+        fi
+
+        if [[ "$publish_version" == "$workspace_version" ]]; then
+          exit 0
+        fi
+
+        mise run publish-version "$publish_version"
+    - id: auth
+      uses: rust-lang/crates-io-auth-action@v1
+    - run: cargo publish --workspace --allow-dirty
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

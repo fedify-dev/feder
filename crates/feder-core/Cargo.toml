@@ -1,11 +1,15 @@
 [package]
 name = "feder-core"
+description = "Portable ActivityPub core logic for Feder."
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
-feder-vocab = { path = "../feder-vocab" }
+feder-vocab.workspace = true
 
 [lints]
 workspace = true
