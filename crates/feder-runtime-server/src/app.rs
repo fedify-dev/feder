@@ -15,7 +15,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::config::RuntimeConfig;
+use crate::config::{InboxAuthPolicy, RuntimeConfig};
 use crate::webfinger::webfinger;
 use crate::{actor::actor, inbox::inbox};
 use axum::routing::post;
@@ -29,6 +29,7 @@ pub struct AppState {
     pub local_actor: Actor,
     pub username: String,
     pub handle_host: String,
+    pub inbox_auth_policy: InboxAuthPolicy,
 }
 
 impl AppState {
@@ -44,6 +45,7 @@ impl AppState {
             local_actor: actor,
             username: config.username,
             handle_host: config.handle_host,
+            inbox_auth_policy: config.inbox_auth_policy,
         }
     }
 }
