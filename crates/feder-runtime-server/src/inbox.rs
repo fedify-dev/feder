@@ -26,6 +26,7 @@ use serde_json::{Value, from_slice, from_value};
 
 use crate::app::AppState;
 use crate::config::InboxAuthPolicy;
+use crate::storage::RuntimeStore;
 
 pub struct InboxRequest {
     pub username: String,
@@ -105,7 +106,14 @@ pub async fn inbox(
         .lock()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let _result = core.handle(input);
+    let result = core.handle(input);
+
+    app_state
+        .store
+        .lock()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .persist_actions(&result.actions)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::ACCEPTED.into_response())
 }

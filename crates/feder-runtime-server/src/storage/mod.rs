@@ -15,8 +15,6 @@
 
 pub mod sqlite;
 
-use std::path::Path;
-
 use feder_core::Action;
 pub use sqlite::SqliteStore;
 
