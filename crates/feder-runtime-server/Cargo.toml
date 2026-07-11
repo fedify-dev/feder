@@ -12,6 +12,7 @@ serde.workspace = true
 thiserror = "2"
 serde_json.workspace = true
 percent-encoding = "2.3.2"
+rusqlite = "0.40.1"
 
 [dev-dependencies]
 serde_json.workspace = true

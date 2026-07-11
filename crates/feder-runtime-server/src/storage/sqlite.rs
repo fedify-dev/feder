@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::path::Path;
+
 use rusqlite::Connection;
 
 use crate::storage::StoreError;
@@ -22,6 +24,26 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
+    pub fn open(path: &Path) -> Result<Self, StoreError> {
+        let store = Self {
+            conn: Connection::open(path)?,
+        };
+
+        store.init()?;
+
+        Ok(store)
+    }
+
+    pub fn open_in_memory() -> Result<Self, StoreError> {
+        let store = Self {
+            conn: Connection::open_in_memory()?,
+        };
+
+        store.init()?;
+
+        Ok(store)
+    }
+
     pub fn init(&self) -> Result<(), StoreError> {
         self.conn.execute_batch(
             r#"
@@ -35,6 +57,4 @@ impl SqliteStore {
 
         Ok(())
     }
-
-    // Col name should be follower_iri??? i am not sure...
 }
