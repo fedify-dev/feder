@@ -13,14 +13,28 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod actor;
-pub mod app;
-pub mod config;
-pub mod error;
-pub mod inbox;
-pub mod storage;
-pub mod webfinger;
+use rusqlite::Connection;
 
-pub use app::{AppState, build_router};
-pub use config::{InboxAuthPolicy, RuntimeConfig};
-pub use error::Error;
+use crate::storage::StoreError;
+
+pub struct SqliteStore {
+    conn: Connection,
+}
+
+impl SqliteStore {
+    pub fn init(&self) -> Result<(), StoreError> {
+        self.conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS followers (
+                follower_actor_id TEXT NOT NULL,
+                following_actor_id TEXT NOT NULL,
+                PRIMARY KEY (follower_actor_id, following_actor_id)
+            );
+            "#,
+        )?;
+
+        Ok(())
+    }
+
+    // Col name should be follower_iri??? i am not sure...
+}

@@ -13,14 +13,29 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod actor;
-pub mod app;
-pub mod config;
-pub mod error;
-pub mod inbox;
-pub mod storage;
-pub mod webfinger;
+pub mod sqlite;
 
-pub use app::{AppState, build_router};
-pub use config::{InboxAuthPolicy, RuntimeConfig};
-pub use error::Error;
+use std::path::Path;
+
+use feder_core::Action;
+pub use sqlite::SqliteStore;
+
+#[derive(Debug, Default)]
+pub struct StoredState {
+    // TODO: Add fields
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error("sqlite error")]
+    Sqlite(#[from] rusqlite::Error),
+
+    #[error("json error")]
+    Json(#[from] serde_json::Error),
+}
+
+pub trait RuntimeStore {
+    fn persist_actions(&mut self, actions: &[Action]) -> Result<(), StoreError>;
+
+    fn load_state(&self) -> Result<StoredState, StoreError>;
+}
