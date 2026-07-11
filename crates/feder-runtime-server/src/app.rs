@@ -16,6 +16,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::config::{InboxAuthPolicy, RuntimeConfig};
+use crate::storage::SqliteStore;
 use crate::webfinger::webfinger;
 use crate::{actor::actor, inbox::inbox};
 use axum::routing::post;
@@ -26,6 +27,7 @@ use feder_vocab::Actor;
 #[derive(Clone)]
 pub struct AppState {
     pub core: Arc<Mutex<FederCore>>,
+    pub store: Arc<Mutex<SqliteStore>>,
     pub local_actor: Actor,
     pub username: String,
     pub handle_host: String,
@@ -42,6 +44,9 @@ impl AppState {
 
         Self {
             core: Arc::new(Mutex::new(core)),
+            store: Arc::new(Mutex::new(
+                SqliteStore::open_in_memory().expect("initialize in-memory SQLite store"),
+            )),
             local_actor: actor,
             username: config.username,
             handle_host: config.handle_host,
