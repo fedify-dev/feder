@@ -102,3 +102,78 @@ fn actor_reference_id(reference: &Reference<Actor>) -> &Iri {
         Reference::Object(actor) => &actor.id,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use feder_core::{Action, StoreFollower};
+
+    use super::*;
+
+    fn iri(value: &str) -> Iri {
+        value.parse().expect("valid test IRI")
+    }
+
+    fn store_follower_action() -> Action {
+        Action::StoreFollower(StoreFollower {
+            follower: Reference::id(iri("https://remote.example/users/bob")),
+            following: Reference::id(iri("https://example.com/users/alice")),
+        })
+    }
+
+    #[test]
+    fn open_in_memory_initializes_followers_table() {
+        let store = SqliteStore::open_in_memory().expect("open in-memory store");
+
+        let table_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'followers'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query followers table");
+
+        assert_eq!(table_count, 1);
+    }
+
+    #[test]
+    fn persist_actions_stores_follower() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+
+        store
+            .persist_actions(&[store_follower_action()])
+            .expect("persist follower action");
+
+        let (follower, following): (String, String) = store
+            .conn
+            .query_row(
+                "SELECT follower_actor_id, following_actor_id FROM followers",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("query stored follower");
+
+        assert_eq!(follower, "https://remote.example/users/bob");
+        assert_eq!(following, "https://example.com/users/alice");
+    }
+
+    #[test]
+    fn persist_actions_ignores_duplicate_follower() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let action = store_follower_action();
+
+        store
+            .persist_actions(&[action.clone()])
+            .expect("persist follower action first time");
+        store
+            .persist_actions(&[action])
+            .expect("persist follower action second time");
+
+        let follower_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM followers", [], |row| row.get(0))
+            .expect("query follower count");
+
+        assert_eq!(follower_count, 1);
+    }
+}
