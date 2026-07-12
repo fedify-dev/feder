@@ -15,12 +15,21 @@
 
 pub mod sqlite;
 
-use feder_core::{Action, Follower};
+use feder_core::Action;
+use feder_vocab::Iri;
 pub use sqlite::SqliteStore;
 
 #[derive(Debug, Default)]
 pub struct StoredState {
-    pub followers: Vec<Follower>,
+    pub followers: Vec<StoredFollower>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredFollower {
+    pub follower: Iri,
+    pub following: Iri,
+    pub inbox: Option<Iri>,
+    pub shared_inbox: Option<Iri>,
 }
 
 #[derive(Debug, thiserror::Error)]
