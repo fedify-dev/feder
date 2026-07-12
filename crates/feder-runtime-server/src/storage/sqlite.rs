@@ -52,6 +52,8 @@ impl SqliteStore {
             CREATE TABLE IF NOT EXISTS followers (
                 follower_actor_id TEXT NOT NULL,
                 following_actor_id TEXT NOT NULL,
+                inbox_url TEXT,
+                shared_inbox_url TEXT,
                 PRIMARY KEY (follower_actor_id, following_actor_id)
             );
             "#,
@@ -69,16 +71,24 @@ impl RuntimeStore for SqliteStore {
             if let Action::StoreFollower(action) = action {
                 let follower = actor_reference_id(&action.follower);
                 let following = actor_reference_id(&action.following);
+                let inbox = actor_reference_inbox(&action.follower);
 
                 tx.execute(
                     r#"
-                INSERT OR IGNORE INTO followers (
-                    follower_actor_id,
-                    following_actor_id
-                )
-                VALUES (?1, ?2)
-                "#,
-                    params![follower.as_str(), following.as_str()],
+                    INSERT INTO followers (
+                        follower_actor_id,
+                        following_actor_id,
+                        inbox_url
+                    )
+                    VALUES (?1, ?2, ?3)
+                    ON CONFLICT(follower_actor_id, following_actor_id) DO UPDATE SET
+                        inbox_url = COALESCE(excluded.inbox_url, followers.inbox_url)
+                    "#,
+                    params![
+                        follower.as_str(),
+                        following.as_str(),
+                        inbox.map(|inbox| inbox.as_str()),
+                    ],
                 )?;
             }
         }
@@ -99,6 +109,13 @@ fn actor_reference_id(reference: &Reference<Actor>) -> &Iri {
     match reference {
         Reference::Id(id) => id,
         Reference::Object(actor) => &actor.id,
+    }
+}
+
+fn actor_reference_inbox(reference: &Reference<Actor>) -> Option<&Iri> {
+    match reference {
+        Reference::Id(_) => None,
+        Reference::Object(actor) => Some(&actor.inbox),
     }
 }
 
@@ -147,6 +164,14 @@ mod tests {
         })
     }
 
+    fn actor(id: &str) -> Actor {
+        Actor::person(
+            iri(id),
+            iri(&format!("{id}/inbox")),
+            iri(&format!("{id}/outbox")),
+        )
+    }
+
     #[test]
     fn open_in_memory_initializes_followers_table() {
         let store = SqliteStore::open_in_memory().expect("open in-memory store");
@@ -161,6 +186,22 @@ mod tests {
             .expect("query followers table");
 
         assert_eq!(table_count, 1);
+
+        let columns: Vec<String> = {
+            let mut stmt = store
+                .conn
+                .prepare("PRAGMA table_info(followers)")
+                .expect("prepare followers table info query");
+            stmt.query_map([], |row| row.get("name"))
+                .expect("query followers table info")
+                .collect::<Result<_, _>>()
+                .expect("collect followers table columns")
+        };
+
+        assert!(columns.contains(&"follower_actor_id".to_string()));
+        assert!(columns.contains(&"following_actor_id".to_string()));
+        assert!(columns.contains(&"inbox_url".to_string()));
+        assert!(columns.contains(&"shared_inbox_url".to_string()));
     }
 
     #[test]
@@ -182,6 +223,29 @@ mod tests {
 
         assert_eq!(follower, "https://remote.example/users/bob");
         assert_eq!(following, "https://example.com/users/alice");
+    }
+
+    #[test]
+    fn persist_actions_stores_embedded_follower_inbox() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let action = Action::StoreFollower(StoreFollower {
+            follower: Reference::object(actor("https://remote.example/users/bob")),
+            following: Reference::id(iri("https://example.com/users/alice")),
+        });
+
+        store
+            .persist_actions(&[action])
+            .expect("persist follower action");
+
+        let inbox: Option<String> = store
+            .conn
+            .query_row("SELECT inbox_url FROM followers", [], |row| row.get(0))
+            .expect("query stored follower inbox");
+
+        assert_eq!(
+            inbox.as_deref(),
+            Some("https://remote.example/users/bob/inbox")
+        );
     }
 
     #[test]
