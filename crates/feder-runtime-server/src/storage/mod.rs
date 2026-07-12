@@ -15,12 +15,12 @@
 
 pub mod sqlite;
 
-use feder_core::Action;
+use feder_core::{Action, Follower};
 pub use sqlite::SqliteStore;
 
 #[derive(Debug, Default)]
 pub struct StoredState {
-    // TODO: Add fields
+    pub followers: Vec<Follower>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +30,9 @@ pub enum StoreError {
 
     #[error("json error")]
     Json(#[from] serde_json::Error),
+
+    #[error("invalid IRI: {0}")]
+    InvalidIri(String),
 }
 
 pub trait RuntimeStore {
