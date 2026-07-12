@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use feder_core::Action;
+use feder_core::{Action, Follower};
 use feder_vocab::{Actor, Iri, Reference};
 use rusqlite::{Connection, params};
 
@@ -66,23 +66,20 @@ impl RuntimeStore for SqliteStore {
         let tx = self.conn.transaction()?;
 
         for action in actions {
-            match action {
-                Action::StoreFollower(action) => {
-                    let follower = actor_reference_id(&action.follower);
-                    let following = actor_reference_id(&action.following);
+            if let Action::StoreFollower(action) = action {
+                let follower = actor_reference_id(&action.follower);
+                let following = actor_reference_id(&action.following);
 
-                    tx.execute(
-                        r#"
-                        INSERT OR IGNORE INTO followers (
-                            follower_actor_id,
-                            following_actor_id
-                        )
-                        VALUES (?1, ?2)
-                        "#,
-                        params![follower.as_str(), following.as_str()],
-                    )?;
-                }
-                _ => {}
+                tx.execute(
+                    r#"
+                INSERT OR IGNORE INTO followers (
+                    follower_actor_id,
+                    following_actor_id
+                )
+                VALUES (?1, ?2)
+                "#,
+                    params![follower.as_str(), following.as_str()],
+                )?;
             }
         }
 
@@ -92,7 +89,9 @@ impl RuntimeStore for SqliteStore {
     }
 
     fn load_state(&self) -> Result<StoredState, StoreError> {
-        Ok(StoredState::default())
+        Ok(StoredState {
+            followers: load_followers(&self.conn)?,
+        })
     }
 }
 
@@ -101,6 +100,34 @@ fn actor_reference_id(reference: &Reference<Actor>) -> &Iri {
         Reference::Id(id) => id,
         Reference::Object(actor) => &actor.id,
     }
+}
+
+fn load_followers(conn: &Connection) -> Result<Vec<Follower>, StoreError> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT follower_actor_id, following_actor_id
+        FROM followers
+        ORDER BY follower_actor_id, following_actor_id
+        "#,
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    rows.map(|row| {
+        let (follower, following) = row?;
+        Ok(Follower {
+            follower: parse_iri(follower)?,
+            following: parse_iri(following)?,
+        })
+    })
+    .collect()
+}
+
+fn parse_iri(value: String) -> Result<Iri, StoreError> {
+    value
+        .parse()
+        .map_err(|_| StoreError::InvalidIri(value.to_owned()))
 }
 
 #[cfg(test)]
@@ -175,5 +202,24 @@ mod tests {
             .expect("query follower count");
 
         assert_eq!(follower_count, 1);
+    }
+
+    #[test]
+    fn load_state_restores_followers() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+
+        store
+            .persist_actions(&[store_follower_action()])
+            .expect("persist follower action");
+
+        let state = store.load_state().expect("load stored state");
+
+        assert_eq!(
+            state.followers,
+            vec![Follower {
+                follower: iri("https://remote.example/users/bob"),
+                following: iri("https://example.com/users/alice"),
+            }]
+        );
     }
 }
