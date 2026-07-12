@@ -19,11 +19,6 @@ use feder_core::Action;
 use feder_vocab::Iri;
 pub use sqlite::SqliteStore;
 
-#[derive(Debug, Default)]
-pub struct StoredState {
-    pub followers: Vec<StoredFollower>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredFollower {
     pub follower: Iri,
@@ -47,5 +42,5 @@ pub enum StoreError {
 pub trait RuntimeStore {
     fn persist_actions(&mut self, actions: &[Action]) -> Result<(), StoreError>;
 
-    fn load_state(&self) -> Result<StoredState, StoreError>;
+    fn load_followers(&self) -> Result<Vec<StoredFollower>, StoreError>;
 }

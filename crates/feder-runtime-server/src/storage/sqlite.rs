@@ -19,7 +19,7 @@ use feder_core::Action;
 use feder_vocab::{Actor, Iri, Reference};
 use rusqlite::{Connection, params};
 
-use crate::storage::{RuntimeStore, StoreError, StoredFollower, StoredState};
+use crate::storage::{RuntimeStore, StoreError, StoredFollower};
 
 pub struct SqliteStore {
     conn: Connection,
@@ -98,10 +98,8 @@ impl RuntimeStore for SqliteStore {
         Ok(())
     }
 
-    fn load_state(&self) -> Result<StoredState, StoreError> {
-        Ok(StoredState {
-            followers: load_followers(&self.conn)?,
-        })
+    fn load_followers(&self) -> Result<Vec<StoredFollower>, StoreError> {
+        query_followers(&self.conn)
     }
 }
 
@@ -119,7 +117,7 @@ fn actor_reference_inbox(reference: &Reference<Actor>) -> Option<&Iri> {
     }
 }
 
-fn load_followers(conn: &Connection) -> Result<Vec<StoredFollower>, StoreError> {
+fn query_followers(conn: &Connection) -> Result<Vec<StoredFollower>, StoreError> {
     let mut stmt = conn.prepare(
         r#"
         SELECT follower_actor_id, following_actor_id, inbox_url, shared_inbox_url
@@ -280,17 +278,17 @@ mod tests {
     }
 
     #[test]
-    fn load_state_restores_followers() {
+    fn load_followers_returns_stored_followers() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
 
         store
             .persist_actions(&[store_follower_action()])
             .expect("persist follower action");
 
-        let state = store.load_state().expect("load stored state");
+        let followers = store.load_followers().expect("load stored followers");
 
         assert_eq!(
-            state.followers,
+            followers,
             vec![StoredFollower {
                 follower: iri("https://remote.example/users/bob"),
                 following: iri("https://example.com/users/alice"),
@@ -301,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn load_state_restores_follower_inbox() {
+    fn load_followers_returns_follower_inbox() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
         let action = Action::StoreFollower(StoreFollower {
             follower: Reference::object(actor("https://remote.example/users/bob")),
@@ -312,10 +310,10 @@ mod tests {
             .persist_actions(&[action])
             .expect("persist follower action");
 
-        let state = store.load_state().expect("load stored state");
+        let followers = store.load_followers().expect("load stored followers");
 
         assert_eq!(
-            state.followers,
+            followers,
             vec![StoredFollower {
                 follower: iri("https://remote.example/users/bob"),
                 following: iri("https://example.com/users/alice"),
