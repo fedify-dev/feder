@@ -19,7 +19,7 @@ use feder_core::Action;
 use feder_vocab::{Actor, Iri, Reference};
 use rusqlite::{Connection, params};
 
-use crate::storage::{RuntimeStore, StoreError, StoredFollower};
+use crate::storage::{RuntimeStore, StoreError, StoredFollower, StoredRecipient};
 
 pub struct SqliteStore {
     conn: Connection,
@@ -98,8 +98,66 @@ impl RuntimeStore for SqliteStore {
         Ok(())
     }
 
-    fn load_followers(&self) -> Result<Vec<StoredFollower>, StoreError> {
-        query_followers(&self.conn)
+    fn list_followers(&self, actor_id: &Iri) -> Result<Vec<StoredFollower>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT follower_actor_id, following_actor_id, inbox_url, shared_inbox_url
+            FROM followers
+            WHERE following_actor_id = ?1
+            ORDER BY follower_actor_id, following_actor_id
+            "#,
+        )?;
+        let rows = stmt.query_map([actor_id.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+
+        rows.map(|row| {
+            let (follower, following, inbox, shared_inbox) = row?;
+            Ok(StoredFollower {
+                follower: parse_iri(follower)?,
+                following: parse_iri(following)?,
+                inbox: parse_optional_iri(inbox)?,
+                shared_inbox: parse_optional_iri(shared_inbox)?,
+            })
+        })
+        .collect()
+    }
+
+    fn list_follower_recipients(
+        &self,
+        actor_id: &Iri,
+    ) -> Result<Vec<StoredRecipient>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT follower_actor_id, inbox_url, shared_inbox_url
+            FROM followers
+            WHERE following_actor_id = ?1
+              AND inbox_url IS NOT NULL
+            ORDER BY follower_actor_id
+            "#,
+        )?;
+        let rows = stmt.query_map([actor_id.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+
+        rows.map(|row| {
+            let (actor_id, inbox, shared_inbox) = row?;
+            Ok(StoredRecipient {
+                actor_id: parse_iri(actor_id)?,
+                inbox: parse_iri(inbox)?,
+                shared_inbox: parse_optional_iri(shared_inbox)?,
+            })
+        })
+        .collect()
     }
 }
 
@@ -115,35 +173,6 @@ fn actor_reference_inbox(reference: &Reference<Actor>) -> Option<&Iri> {
         Reference::Id(_) => None,
         Reference::Object(actor) => Some(&actor.inbox),
     }
-}
-
-fn query_followers(conn: &Connection) -> Result<Vec<StoredFollower>, StoreError> {
-    let mut stmt = conn.prepare(
-        r#"
-        SELECT follower_actor_id, following_actor_id, inbox_url, shared_inbox_url
-        FROM followers
-        ORDER BY follower_actor_id, following_actor_id
-        "#,
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, Option<String>>(3)?,
-        ))
-    })?;
-
-    rows.map(|row| {
-        let (follower, following, inbox, shared_inbox) = row?;
-        Ok(StoredFollower {
-            follower: parse_iri(follower)?,
-            following: parse_iri(following)?,
-            inbox: parse_optional_iri(inbox)?,
-            shared_inbox: parse_optional_iri(shared_inbox)?,
-        })
-    })
-    .collect()
 }
 
 fn parse_iri(value: String) -> Result<Iri, StoreError> {
@@ -278,14 +307,16 @@ mod tests {
     }
 
     #[test]
-    fn load_followers_returns_stored_followers() {
+    fn list_followers_returns_stored_followers() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
 
         store
             .persist_actions(&[store_follower_action()])
             .expect("persist follower action");
 
-        let followers = store.load_followers().expect("load stored followers");
+        let followers = store
+            .list_followers(&iri("https://example.com/users/alice"))
+            .expect("list stored followers");
 
         assert_eq!(
             followers,
@@ -299,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn load_followers_returns_follower_inbox() {
+    fn list_followers_returns_follower_inbox() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
         let action = Action::StoreFollower(StoreFollower {
             follower: Reference::object(actor("https://remote.example/users/bob")),
@@ -310,7 +341,9 @@ mod tests {
             .persist_actions(&[action])
             .expect("persist follower action");
 
-        let followers = store.load_followers().expect("load stored followers");
+        let followers = store
+            .list_followers(&iri("https://example.com/users/alice"))
+            .expect("list stored followers");
 
         assert_eq!(
             followers,
@@ -318,6 +351,97 @@ mod tests {
                 follower: iri("https://remote.example/users/bob"),
                 following: iri("https://example.com/users/alice"),
                 inbox: Some(iri("https://remote.example/users/bob/inbox")),
+                shared_inbox: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn list_followers_returns_only_followers_for_actor() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let bob_follows_alice = Action::StoreFollower(StoreFollower {
+            follower: Reference::id(iri("https://remote.example/users/bob")),
+            following: Reference::id(iri("https://example.com/users/alice")),
+        });
+        let carol_follows_eve = Action::StoreFollower(StoreFollower {
+            follower: Reference::id(iri("https://remote.example/users/carol")),
+            following: Reference::id(iri("https://example.com/users/eve")),
+        });
+
+        store
+            .persist_actions(&[bob_follows_alice, carol_follows_eve])
+            .expect("persist follower actions");
+
+        let followers = store
+            .list_followers(&iri("https://example.com/users/alice"))
+            .expect("list stored followers");
+
+        assert_eq!(
+            followers,
+            vec![StoredFollower {
+                follower: iri("https://remote.example/users/bob"),
+                following: iri("https://example.com/users/alice"),
+                inbox: None,
+                shared_inbox: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn list_follower_recipients_returns_followers_with_inboxes() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let follower_with_inbox = Action::StoreFollower(StoreFollower {
+            follower: Reference::object(actor("https://remote.example/users/bob")),
+            following: Reference::id(iri("https://example.com/users/alice")),
+        });
+        let follower_without_inbox = Action::StoreFollower(StoreFollower {
+            follower: Reference::id(iri("https://remote.example/users/carol")),
+            following: Reference::id(iri("https://example.com/users/alice")),
+        });
+
+        store
+            .persist_actions(&[follower_with_inbox, follower_without_inbox])
+            .expect("persist follower actions");
+
+        let recipients = store
+            .list_follower_recipients(&iri("https://example.com/users/alice"))
+            .expect("list follower recipients");
+
+        assert_eq!(
+            recipients,
+            vec![StoredRecipient {
+                actor_id: iri("https://remote.example/users/bob"),
+                inbox: iri("https://remote.example/users/bob/inbox"),
+                shared_inbox: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn list_follower_recipients_returns_only_recipients_for_actor() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let bob_follows_alice = Action::StoreFollower(StoreFollower {
+            follower: Reference::object(actor("https://remote.example/users/bob")),
+            following: Reference::id(iri("https://example.com/users/alice")),
+        });
+        let carol_follows_eve = Action::StoreFollower(StoreFollower {
+            follower: Reference::object(actor("https://remote.example/users/carol")),
+            following: Reference::id(iri("https://example.com/users/eve")),
+        });
+
+        store
+            .persist_actions(&[bob_follows_alice, carol_follows_eve])
+            .expect("persist follower actions");
+
+        let recipients = store
+            .list_follower_recipients(&iri("https://example.com/users/alice"))
+            .expect("list follower recipients");
+
+        assert_eq!(
+            recipients,
+            vec![StoredRecipient {
+                actor_id: iri("https://remote.example/users/bob"),
+                inbox: iri("https://remote.example/users/bob/inbox"),
                 shared_inbox: None,
             }]
         );
