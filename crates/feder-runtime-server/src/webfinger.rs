@@ -88,7 +88,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_webfinger_descriptor_for_local_actor() {
-        let app = build_router(test_config());
+        let app = build_router(test_config()).expect("build router");
 
         let response = app
             .oneshot(
@@ -123,7 +123,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_missing_resource() {
-        let app = build_router(test_config());
+        let app = build_router(test_config()).expect("build router");
 
         let response = app
             .oneshot(
@@ -140,7 +140,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_non_local_actor_resource() {
-        let app = build_router(test_config());
+        let app = build_router(test_config()).expect("build router");
 
         let response = app
             .oneshot(
