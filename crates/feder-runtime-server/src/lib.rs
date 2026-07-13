@@ -22,5 +22,5 @@ pub mod storage;
 pub mod webfinger;
 
 pub use app::{AppState, build_router};
-pub use config::{InboxAuthPolicy, RuntimeConfig};
+pub use config::{InboxAuthPolicy, RuntimeConfig, StorageConfig};
 pub use error::Error;

@@ -20,4 +20,7 @@ pub enum Error {
 
     #[error("server failed")]
     Serve(#[source] std::io::Error),
+
+    #[error("storage failed")]
+    Storage(#[from] crate::storage::StoreError),
 }

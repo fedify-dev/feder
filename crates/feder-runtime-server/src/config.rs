@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, path::PathBuf};
 
 use feder_vocab::Iri;
 
@@ -21,6 +21,12 @@ use feder_vocab::Iri;
 pub enum InboxAuthPolicy {
     RequireSigned,
     AllowUnsignedInsecureDev,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StorageConfig {
+    InMemory,
+    Sqlite { path: PathBuf },
 }
 
 pub struct RuntimeConfig {
@@ -31,6 +37,7 @@ pub struct RuntimeConfig {
     pub username: String,
     pub handle_host: String,
     pub inbox_auth_policy: InboxAuthPolicy,
+    pub storage: StorageConfig,
 }
 
 #[cfg(test)]
@@ -49,5 +56,6 @@ pub(crate) fn test_config() -> RuntimeConfig {
         username: "alice".to_string(),
         handle_host: "127.0.0.1:3000".to_string(),
         inbox_auth_policy: InboxAuthPolicy::AllowUnsignedInsecureDev,
+        storage: StorageConfig::InMemory,
     }
 }

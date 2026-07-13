@@ -132,7 +132,8 @@ mod tests {
     use crate::{
         app::AppState,
         build_router,
-        config::{InboxAuthPolicy, test_config},
+        config::{InboxAuthPolicy, StorageConfig, test_config},
+        storage::RuntimeStore,
     };
 
     use super::inbox;
@@ -181,7 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn valid_follow_reaches_core() {
-        let app_state = AppState::from_config(test_config());
+        let app_state = AppState::from_config(test_config()).expect("build app state");
 
         let response = post_inbox(
             app_state.clone(),
@@ -215,7 +216,7 @@ mod tests {
     async fn require_signed_rejects_unsigned_follow_before_core() {
         let mut config = test_config();
         config.inbox_auth_policy = InboxAuthPolicy::RequireSigned;
-        let app_state = AppState::from_config(config);
+        let app_state = AppState::from_config(config).expect("build app state");
 
         let error = post_inbox(
             app_state.clone(),
@@ -240,7 +241,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_unknown_inbox_actor() {
-        let app_state = AppState::from_config(test_config());
+        let app_state = AppState::from_config(test_config()).expect("build app state");
 
         let error = post_inbox(
             app_state.clone(),
@@ -265,7 +266,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_unsupported_content_type() {
-        let app_state = AppState::from_config(test_config());
+        let app_state = AppState::from_config(test_config()).expect("build app state");
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
 
@@ -287,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_malformed_json() {
-        let app_state = AppState::from_config(test_config());
+        let app_state = AppState::from_config(test_config()).expect("build app state");
 
         let error = post_inbox(
             app_state.clone(),
@@ -312,7 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn ignores_unsupported_activity_without_mutating_core() {
-        let app_state = AppState::from_config(test_config());
+        let app_state = AppState::from_config(test_config()).expect("build app state");
         let body = Bytes::from(
             serde_json::to_vec(&json!({
                 "@context": "https://www.w3.org/ns/activitystreams",
@@ -345,7 +346,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_oversized_inbox_body() {
-        let app = build_router(test_config());
+        let app = build_router(test_config()).expect("build router");
         let oversized_body = vec![b' '; 1_048_577];
 
         let response = app
@@ -361,5 +362,55 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn sqlite_storage_persists_followers_across_app_state_reopen() {
+        let path = std::env::temp_dir().join(format!(
+            "feder-runtime-server-test-{}-{}.sqlite3",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time after unix epoch")
+                .as_nanos()
+        ));
+
+        let mut config = test_config();
+        config.storage = StorageConfig::Sqlite { path: path.clone() };
+        let app_state = AppState::from_config(config).expect("build app state");
+
+        let response = post_inbox(
+            app_state.clone(),
+            "alice",
+            activity_json_headers(),
+            follow_body(),
+        )
+        .await
+        .expect("accepted follow");
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        drop(app_state);
+
+        let mut config = test_config();
+        config.storage = StorageConfig::Sqlite { path: path.clone() };
+        let app_state = AppState::from_config(config).expect("reopen app state");
+        let followers = app_state
+            .store
+            .lock()
+            .expect("store lock")
+            .list_followers(
+                &"http://127.0.0.1:3000/users/alice"
+                    .parse()
+                    .expect("valid IRI"),
+            )
+            .expect("list followers");
+
+        assert_eq!(followers.len(), 1);
+        assert_eq!(
+            followers[0].follower.as_str(),
+            "https://remote.example/users/bob"
+        );
+
+        let _ = std::fs::remove_file(path);
     }
 }
