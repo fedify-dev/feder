@@ -72,22 +72,29 @@ impl RuntimeStore for SqliteStore {
                 let follower = actor_reference_id(&action.follower);
                 let following = actor_reference_id(&action.following);
                 let inbox = actor_reference_inbox(&action.follower);
+                let shared_inbox = actor_reference_shared_inbox(&action.follower);
 
                 tx.execute(
                     r#"
                     INSERT INTO followers (
                         follower_actor_id,
                         following_actor_id,
-                        inbox_url
+                        inbox_url,
+                        shared_inbox_url
                     )
-                    VALUES (?1, ?2, ?3)
+                    VALUES (?1, ?2, ?3, ?4)
                     ON CONFLICT(follower_actor_id, following_actor_id) DO UPDATE SET
-                        inbox_url = COALESCE(excluded.inbox_url, followers.inbox_url)
+                        inbox_url = COALESCE(excluded.inbox_url, followers.inbox_url),
+                        shared_inbox_url = COALESCE(
+                            excluded.shared_inbox_url,
+                            followers.shared_inbox_url
+                        )
                     "#,
                     params![
                         follower.as_str(),
                         following.as_str(),
                         inbox.map(|inbox| inbox.as_str()),
+                        shared_inbox.map(|shared_inbox| shared_inbox.as_str()),
                     ],
                 )?;
             }
@@ -169,6 +176,16 @@ fn actor_reference_inbox(reference: &Reference<Actor>) -> Option<&Iri> {
     match reference {
         Reference::Id(_) => None,
         Reference::Object(actor) => Some(&actor.inbox),
+    }
+}
+
+fn actor_reference_shared_inbox(reference: &Reference<Actor>) -> Option<&Iri> {
+    match reference {
+        Reference::Id(_) => None,
+        Reference::Object(actor) => actor
+            .endpoints
+            .as_ref()
+            .and_then(|endpoints| endpoints.shared_inbox.as_ref()),
     }
 }
 
@@ -284,6 +301,35 @@ mod tests {
     }
 
     #[test]
+    fn persist_actions_stores_embedded_follower_shared_inbox() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let mut follower = actor("https://remote.example/users/bob");
+        follower.endpoints = Some(feder_vocab::Endpoints {
+            shared_inbox: Some(iri("https://remote.example/inbox")),
+        });
+        let action = Action::StoreFollower(StoreFollower {
+            follower: Reference::object(follower),
+            following: Reference::id(iri("https://example.com/users/alice")),
+        });
+
+        store
+            .persist_actions(&[action])
+            .expect("persist follower action");
+
+        let shared_inbox: Option<String> = store
+            .conn
+            .query_row("SELECT shared_inbox_url FROM followers", [], |row| {
+                row.get(0)
+            })
+            .expect("query stored follower shared inbox");
+
+        assert_eq!(
+            shared_inbox.as_deref(),
+            Some("https://remote.example/inbox")
+        );
+    }
+
+    #[test]
     fn persist_actions_ignores_duplicate_follower() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
         let action = store_follower_action();
@@ -329,8 +375,12 @@ mod tests {
     #[test]
     fn list_followers_returns_follower_inbox() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let mut follower = actor("https://remote.example/users/bob");
+        follower.endpoints = Some(feder_vocab::Endpoints {
+            shared_inbox: Some(iri("https://remote.example/inbox")),
+        });
         let action = Action::StoreFollower(StoreFollower {
-            follower: Reference::object(actor("https://remote.example/users/bob")),
+            follower: Reference::object(follower),
             following: Reference::id(iri("https://example.com/users/alice")),
         });
 
@@ -348,7 +398,7 @@ mod tests {
                 follower: iri("https://remote.example/users/bob"),
                 following: iri("https://example.com/users/alice"),
                 inbox: Some(iri("https://remote.example/users/bob/inbox")),
-                shared_inbox: None,
+                shared_inbox: Some(iri("https://remote.example/inbox")),
             }]
         );
     }
@@ -387,8 +437,12 @@ mod tests {
     #[test]
     fn list_follower_recipients_returns_followers_with_inboxes() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let mut follower = actor("https://remote.example/users/bob");
+        follower.endpoints = Some(feder_vocab::Endpoints {
+            shared_inbox: Some(iri("https://remote.example/inbox")),
+        });
         let follower_with_inbox = Action::StoreFollower(StoreFollower {
-            follower: Reference::object(actor("https://remote.example/users/bob")),
+            follower: Reference::object(follower),
             following: Reference::id(iri("https://example.com/users/alice")),
         });
         let follower_without_inbox = Action::StoreFollower(StoreFollower {
@@ -409,7 +463,7 @@ mod tests {
             vec![StoredRecipient {
                 actor_id: iri("https://remote.example/users/bob"),
                 inbox: iri("https://remote.example/users/bob/inbox"),
-                shared_inbox: None,
+                shared_inbox: Some(iri("https://remote.example/inbox")),
             }]
         );
     }

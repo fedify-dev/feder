@@ -182,6 +182,13 @@ pub enum ActorType {
     Service,
 }
 
+/// ActivityPub actor endpoints.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Endpoints {
+    #[serde(rename = "sharedInbox", skip_serializing_if = "Option::is_none")]
+    pub shared_inbox: Option<Iri>,
+}
+
 /// A minimal ActivityPub actor.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Actor {
@@ -196,6 +203,8 @@ pub struct Actor {
     pub preferred_username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoints: Option<Endpoints>,
 }
 
 impl Actor {
@@ -218,6 +227,7 @@ impl Actor {
             outbox,
             preferred_username: None,
             name: None,
+            endpoints: None,
         }
     }
 }
@@ -384,12 +394,22 @@ mod tests {
             "inbox": "https://example.com/users/alice/inbox",
             "outbox": "https://example.com/users/alice/outbox",
             "preferredUsername": "alice",
-            "name": "Alice"
+            "name": "Alice",
+            "endpoints": {
+                "sharedInbox": "https://example.com/inbox"
+            }
         }))
         .expect("deserialize actor from json");
 
         assert_eq!(actor.id, iri("https://example.com/users/alice"));
         assert_eq!(actor.preferred_username, Some("alice".to_string()));
+        assert_eq!(
+            actor
+                .endpoints
+                .as_ref()
+                .and_then(|endpoints| endpoints.shared_inbox.as_ref()),
+            Some(&iri("https://example.com/inbox"))
+        );
     }
 
     #[test]
