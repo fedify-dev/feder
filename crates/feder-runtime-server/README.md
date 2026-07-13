@@ -9,15 +9,17 @@ It provides a health check endpoint, WebFinger discovery, and a local actor
 route. The caller chooses concrete bind addresses, actor IRIs, usernames, and
 handle hosts.
 
-ActivityPub inbox handling for supported Follow activities is included. Storage,
-signature verification, and delivery are intentionally left to later issues.
+ActivityPub inbox handling for supported Follow activities is included. The
+runtime can use in-memory storage for tests and examples, or file-backed SQLite
+storage for persisted follower state. Signature verification and delivery are
+intentionally left to later issues.
 
 
 Example
 -------
 
 ~~~~ rust
-use feder_runtime_server::{InboxAuthPolicy, RuntimeConfig, build_router};
+use feder_runtime_server::{InboxAuthPolicy, RuntimeConfig, StorageConfig, build_router};
 
 let config = RuntimeConfig {
     bind: "127.0.0.1:3000".parse().expect("valid bind address"),
@@ -33,9 +35,10 @@ let config = RuntimeConfig {
     username: "alice".to_string(),
     handle_host: "127.0.0.1:3000".to_string(),
     inbox_auth_policy: InboxAuthPolicy::AllowUnsignedInsecureDev,
+    storage: StorageConfig::InMemory,
 };
 
-let app = build_router(config);
+let app = build_router(config).expect("build router");
 ~~~~
 
 

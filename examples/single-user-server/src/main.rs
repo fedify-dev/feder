@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use feder_runtime_server::{Error, InboxAuthPolicy, RuntimeConfig, build_router};
+use feder_runtime_server::{Error, InboxAuthPolicy, RuntimeConfig, StorageConfig, build_router};
 
 fn default_local() -> RuntimeConfig {
     RuntimeConfig {
@@ -32,6 +32,7 @@ fn default_local() -> RuntimeConfig {
         username: "alice".to_string(),
         handle_host: "127.0.0.1:3000".to_string(),
         inbox_auth_policy: InboxAuthPolicy::AllowUnsignedInsecureDev,
+        storage: StorageConfig::InMemory,
     }
 }
 
@@ -44,7 +45,7 @@ async fn main() -> Result<(), Error> {
     let config = default_local();
     let bind = config.bind;
     let actor_id = config.actor_id.clone();
-    let app = build_router(config);
+    let app = build_router(config)?;
 
     tracing::info!(bind = %bind, actor = %actor_id, "starting Feder single-user example");
 

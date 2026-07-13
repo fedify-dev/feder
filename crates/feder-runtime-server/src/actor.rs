@@ -51,7 +51,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_local_actor() {
-        let app = build_router(test_config());
+        let app = build_router(test_config()).expect("build router");
 
         let response = app
             .oneshot(
@@ -85,7 +85,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_unknown_actor() {
-        let app = build_router(test_config());
+        let app = build_router(test_config()).expect("build router");
 
         let response = app
             .oneshot(

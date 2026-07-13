@@ -51,8 +51,5 @@ pub trait RuntimeStore {
 
     fn list_followers(&self, actor_id: &Iri) -> Result<Vec<StoredFollower>, StoreError>;
 
-    fn list_follower_recipients(
-        &self,
-        actor_id: &Iri,
-    ) -> Result<Vec<StoredRecipient>, StoreError>;
+    fn list_follower_recipients(&self, actor_id: &Iri) -> Result<Vec<StoredRecipient>, StoreError>;
 }

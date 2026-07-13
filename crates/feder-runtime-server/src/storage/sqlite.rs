@@ -128,10 +128,7 @@ impl RuntimeStore for SqliteStore {
         .collect()
     }
 
-    fn list_follower_recipients(
-        &self,
-        actor_id: &Iri,
-    ) -> Result<Vec<StoredRecipient>, StoreError> {
+    fn list_follower_recipients(&self, actor_id: &Iri) -> Result<Vec<StoredRecipient>, StoreError> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT follower_actor_id, inbox_url, shared_inbox_url
