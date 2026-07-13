@@ -56,6 +56,8 @@ impl SqliteStore {
                 shared_inbox_url TEXT,
                 PRIMARY KEY (follower_actor_id, following_actor_id)
             );
+            CREATE INDEX IF NOT EXISTS idx_followers_following_actor_id
+                ON followers (following_actor_id);
             "#,
         )?;
 
@@ -68,14 +70,15 @@ impl RuntimeStore for SqliteStore {
         let tx = self.conn.transaction()?;
 
         for action in actions {
-            if let Action::StoreFollower(action) = action {
-                let follower = actor_reference_id(&action.follower);
-                let following = actor_reference_id(&action.following);
-                let inbox = actor_reference_inbox(&action.follower);
-                let shared_inbox = actor_reference_shared_inbox(&action.follower);
+            match action {
+                Action::StoreFollower(action) => {
+                    let follower = actor_reference_id(&action.follower);
+                    let following = actor_reference_id(&action.following);
+                    let inbox = actor_reference_inbox(&action.follower);
+                    let shared_inbox = actor_reference_shared_inbox(&action.follower);
 
-                tx.execute(
-                    r#"
+                    tx.execute(
+                        r#"
                     INSERT INTO followers (
                         follower_actor_id,
                         following_actor_id,
@@ -90,13 +93,25 @@ impl RuntimeStore for SqliteStore {
                             followers.shared_inbox_url
                         )
                     "#,
-                    params![
-                        follower.as_str(),
-                        following.as_str(),
-                        inbox.map(|inbox| inbox.as_str()),
-                        shared_inbox.map(|shared_inbox| shared_inbox.as_str()),
-                    ],
-                )?;
+                        params![
+                            follower.as_str(),
+                            following.as_str(),
+                            inbox.map(|inbox| inbox.as_str()),
+                            shared_inbox.map(|shared_inbox| shared_inbox.as_str()),
+                        ],
+                    )?;
+                }
+                Action::StoreDeliveryTarget(action) => {
+                    tx.execute(
+                        r#"
+                        UPDATE followers
+                        SET inbox_url = ?2
+                        WHERE follower_actor_id = ?1
+                        "#,
+                        params![action.target.actor.as_str(), action.target.inbox.as_str()],
+                    )?;
+                }
+                _ => {}
             }
         }
 
@@ -254,6 +269,17 @@ mod tests {
         assert!(columns.contains(&"following_actor_id".to_string()));
         assert!(columns.contains(&"inbox_url".to_string()));
         assert!(columns.contains(&"shared_inbox_url".to_string()));
+
+        let index_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_followers_following_actor_id'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query followers following index");
+
+        assert_eq!(index_count, 1);
     }
 
     #[test]
@@ -347,6 +373,38 @@ mod tests {
             .expect("query follower count");
 
         assert_eq!(follower_count, 1);
+    }
+
+    #[test]
+    fn persist_actions_updates_follower_inbox_from_delivery_target() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+
+        store
+            .persist_actions(&[store_follower_action()])
+            .expect("persist ID-only follower action");
+        store
+            .persist_actions(&[Action::StoreDeliveryTarget(
+                feder_core::StoreDeliveryTarget {
+                    target: feder_core::DeliveryTarget {
+                        actor: iri("https://remote.example/users/bob"),
+                        inbox: iri("https://remote.example/users/bob/updated-inbox"),
+                    },
+                },
+            )])
+            .expect("persist delivery target action");
+
+        let recipients = store
+            .list_follower_recipients(&iri("https://example.com/users/alice"))
+            .expect("list follower recipients");
+
+        assert_eq!(
+            recipients,
+            vec![StoredRecipient {
+                actor_id: iri("https://remote.example/users/bob"),
+                inbox: iri("https://remote.example/users/bob/updated-inbox"),
+                shared_inbox: None,
+            }]
+        );
     }
 
     #[test]
