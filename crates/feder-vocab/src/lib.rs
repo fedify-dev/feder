@@ -381,6 +381,9 @@ mod tests {
         );
         actor.preferred_username = Some("alice".to_string());
         actor.name = Some("Alice".to_string());
+        actor.endpoints = Some(Endpoints {
+            shared_inbox: Some(iri("https://example.com/inbox")),
+        });
 
         assert_eq!(roundtrip(&actor), actor);
     }

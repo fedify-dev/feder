@@ -101,12 +101,13 @@ pub async fn inbox(
     let accept_id = accept_id_for_follow(&app_state.local_actor.id, &follow.id)?;
     let input = Input::received_follow(follow, accept_id);
 
-    let mut core = app_state
-        .core
-        .lock()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let result = core.handle(input);
+    let result = {
+        let mut core = app_state
+            .core
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        core.handle(input)
+    };
 
     app_state
         .store
