@@ -299,6 +299,106 @@ impl Input {
     }
 }
 
+/// Runtime-provided stored state for deciding a received Follow.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReceivedFollowState {
+    pub already_processed: bool,
+    pub relationship: FollowRelationship,
+    pub remote_actor: Option<RemoteActorState>,
+}
+
+/// Current stored relationship between a remote actor and the local actor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FollowRelationship {
+    NotFollowing,
+    Following,
+}
+
+/// Runtime-known state for a remote actor referenced by an input.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteActorState {
+    pub actor_id: vocab::Iri,
+    pub inbox: Option<vocab::Iri>,
+    pub shared_inbox: Option<vocab::Iri>,
+}
+
+/// Application policy decision for a received Follow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FollowPolicyDecision {
+    Accept,
+    Reject,
+    RequireManualApproval,
+}
+
+/// Deterministic runtime-provided context for one core decision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecisionContext {
+    pub local_actor: vocab::Iri,
+    pub accept_id: vocab::Iri,
+}
+
+/// Declarative result of a pure core decision.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Decision {
+    pub state_changes: Vec<StateChange>,
+    pub effects: Vec<Effect>,
+}
+
+impl Decision {
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.state_changes.is_empty() && self.effects.is_empty()
+    }
+}
+
+/// Durable state change a runtime should apply transactionally.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum StateChange {
+    RecordProcessedActivity {
+        activity_id: vocab::Iri,
+    },
+    AddFollower {
+        local_actor: vocab::Iri,
+        remote_actor: vocab::Iri,
+        inbox: Option<vocab::Iri>,
+        shared_inbox: Option<vocab::Iri>,
+    },
+    StoreActivity {
+        activity: Activity,
+    },
+    StoreObject {
+        object: Object,
+    },
+}
+
+/// External work a runtime should plan after durable state is committed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Effect {
+    PlanDelivery(PlannedDelivery),
+}
+
+/// Delivery work to persist for a later delivery worker.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlannedDelivery {
+    pub activity: Activity,
+    pub inbox: vocab::Iri,
+}
+
+/// Error raised while deciding protocol consequences.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum CoreError {
+    MissingRemoteActor,
+    MissingInbox,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Follower {
     pub follower: vocab::Iri,
@@ -418,6 +518,15 @@ mod tests {
         assert!(core.state().delivery_targets().is_empty());
         assert!(core.state().objects().is_empty());
         assert!(core.state().activities().is_empty());
+    }
+
+    #[test]
+    fn empty_decision_has_no_state_changes_or_effects() {
+        let decision = Decision::none();
+
+        assert!(decision.is_empty());
+        assert!(decision.state_changes.is_empty());
+        assert!(decision.effects.is_empty());
     }
 
     #[test]
