@@ -9,10 +9,10 @@ It provides a health check endpoint, WebFinger discovery, and a local actor
 route. The caller chooses concrete bind addresses, actor IRIs, usernames, and
 handle hosts.
 
-ActivityPub inbox handling for supported Follow activities is included. The
-runtime can use in-memory storage for tests and examples, or file-backed SQLite
-storage for persisted follower state. Signature verification and delivery are
-intentionally left to later issues.
+ActivityPub inbox handling for supported Follow activities is included. For a
+received Follow, the runtime parses the request, loads stored Follow state,
+asks `feder-core` for a decision, and applies the returned state changes and
+queued delivery work in one SQLite transaction.
 
 
 Example
