@@ -48,10 +48,7 @@ impl FederCore {
     #[must_use]
     pub fn handle(&mut self, input: Input) -> HandleResult {
         match input {
-            Input::ReceivedFollow(input) => {
-                let actions = self.state.record_follow(input);
-                HandleResult::new(actions)
-            }
+            Input::ReceivedFollow(_) => HandleResult::default(),
             Input::UserCreateNote(input) => {
                 let actions = self.state.record_created_note(input);
                 HandleResult::new(actions)
@@ -147,8 +144,6 @@ impl FederConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederState {
     local_actor: vocab::Actor,
-    followers: Vec<Follower>,
-    delivery_targets: Vec<DeliveryTarget>,
     objects: Vec<Object>,
     activities: Vec<Activity>,
 }
@@ -158,8 +153,6 @@ impl FederState {
     pub fn new(config: FederConfig) -> Self {
         Self {
             local_actor: config.local_actor,
-            followers: Vec::new(),
-            delivery_targets: Vec::new(),
             objects: Vec::new(),
             activities: Vec::new(),
         }
@@ -171,20 +164,6 @@ impl FederState {
     }
 
     #[must_use]
-    pub fn followers(&self) -> &[Follower] {
-        &self.followers
-    }
-
-    #[must_use]
-    /// Delivery targets known from embedded actor data.
-    ///
-    /// ID-only followers are tracked in `followers`, but they do not produce a
-    /// delivery target until a runtime or later core flow resolves actor data.
-    pub fn delivery_targets(&self) -> &[DeliveryTarget] {
-        &self.delivery_targets
-    }
-
-    #[must_use]
     pub fn objects(&self) -> &[Object] {
         &self.objects
     }
@@ -192,85 +171,6 @@ impl FederState {
     #[must_use]
     pub fn activities(&self) -> &[Activity] {
         &self.activities
-    }
-
-    fn record_follow(&mut self, input: ReceivedFollow) -> Vec<Action> {
-        let follow = input.follow;
-        let Some(following) = reference_id(&follow.object) else {
-            return Vec::new();
-        };
-
-        if following != &self.local_actor.id {
-            return Vec::new();
-        }
-
-        let Some(follower) = reference_id(&follow.actor).cloned() else {
-            return Vec::new();
-        };
-
-        let relation = Follower {
-            follower: follower.clone(),
-            following: following.clone(),
-        };
-        let mut actions = Vec::new();
-
-        if !self.followers.contains(&relation) {
-            self.followers.push(relation.clone());
-
-            actions.push(Action::StoreFollower(StoreFollower {
-                follower: follow.actor.clone(),
-                following: follow.object.clone(),
-            }));
-        }
-
-        let mut inbox = self
-            .delivery_targets
-            .iter()
-            .find(|target| target.actor == follower)
-            .map(|target| target.inbox.clone());
-
-        if let vocab::Reference::Object(actor) = &follow.actor {
-            let target = DeliveryTarget {
-                actor: follower,
-                inbox: actor.inbox.clone(),
-            };
-            let mut should_store_target = false;
-
-            if let Some(existing) = self
-                .delivery_targets
-                .iter_mut()
-                .find(|existing| existing.actor == target.actor)
-            {
-                if existing.inbox != target.inbox {
-                    existing.inbox = target.inbox.clone();
-                    should_store_target = true;
-                }
-            } else {
-                self.delivery_targets.push(target.clone());
-                should_store_target = true;
-            }
-
-            if should_store_target {
-                actions.push(Action::StoreDeliveryTarget(StoreDeliveryTarget { target }));
-            }
-
-            inbox = Some(actor.inbox.clone());
-        }
-
-        if let Some(inbox) = inbox {
-            let accept = vocab::Accept::new(
-                input.accept_id,
-                vocab::Reference::id(self.local_actor.id.clone()),
-                vocab::Reference::object(follow),
-            );
-
-            actions.push(Action::SendActivity(SendActivity {
-                activity: Activity::Accept(accept),
-                inbox,
-            }));
-        }
-
-        actions
     }
 
     fn record_created_note(&mut self, input: UserCreateNote) -> Vec<Action> {
@@ -299,16 +199,7 @@ impl FederState {
         self.objects.push(object.clone());
         self.activities.push(Activity::CreateNote(create.clone()));
 
-        let mut actions = Vec::from([Action::StoreObject(StoreObject { object })]);
-
-        actions.extend(self.delivery_targets.iter().map(|target| {
-            Action::SendActivity(SendActivity {
-                activity: Activity::CreateNote(create.clone()),
-                inbox: target.inbox.clone(),
-            })
-        }));
-
-        actions
+        Vec::from([Action::StoreObject(StoreObject { object })])
     }
 }
 
@@ -569,13 +460,6 @@ mod tests {
         FederCore::new(FederConfig::new(actor("https://example.com/users/alice")))
     }
 
-    fn received_follow(follow: vocab::Follow, id: &str) -> Input {
-        Input::ReceivedFollow(ReceivedFollow {
-            follow,
-            accept_id: iri(id),
-        })
-    }
-
     #[test]
     fn core_is_created_with_local_actor_state() {
         let core = core();
@@ -584,192 +468,8 @@ mod tests {
             core.state().local_actor().id,
             iri("https://example.com/users/alice")
         );
-        assert!(core.state().followers().is_empty());
-        assert!(core.state().delivery_targets().is_empty());
         assert!(core.state().objects().is_empty());
         assert!(core.state().activities().is_empty());
-    }
-
-    #[test]
-    fn received_follow_records_follower_and_emits_accept_actions() {
-        let mut core = core();
-        let follow = vocab::Follow::new(
-            iri("https://remote.example/activities/follow/1"),
-            vocab::Reference::object(actor("https://remote.example/users/bob")),
-            vocab::Reference::id(iri("https://example.com/users/alice")),
-        );
-
-        let result = core.handle(received_follow(
-            follow,
-            "https://example.com/activities/accept/1",
-        ));
-
-        assert_eq!(result.actions.len(), 3);
-        assert_eq!(
-            core.state().followers(),
-            &[Follower {
-                follower: iri("https://remote.example/users/bob"),
-                following: iri("https://example.com/users/alice"),
-            }]
-        );
-        assert_eq!(
-            core.state().delivery_targets(),
-            &[DeliveryTarget {
-                actor: iri("https://remote.example/users/bob"),
-                inbox: iri("https://remote.example/users/bob/inbox"),
-            }]
-        );
-        assert_eq!(
-            result.actions[0],
-            Action::StoreFollower(StoreFollower {
-                follower: vocab::Reference::object(actor("https://remote.example/users/bob")),
-                following: vocab::Reference::id(iri("https://example.com/users/alice")),
-            })
-        );
-        assert_eq!(
-            result.actions[1],
-            Action::StoreDeliveryTarget(StoreDeliveryTarget {
-                target: DeliveryTarget {
-                    actor: iri("https://remote.example/users/bob"),
-                    inbox: iri("https://remote.example/users/bob/inbox"),
-                },
-            })
-        );
-
-        let Action::SendActivity(send) = &result.actions[2] else {
-            panic!("expected SendActivity action");
-        };
-        assert_eq!(send.inbox, iri("https://remote.example/users/bob/inbox"));
-
-        let Activity::Accept(accept) = &send.activity else {
-            panic!("expected Accept activity");
-        };
-        assert_eq!(accept.id, iri("https://example.com/activities/accept/1"));
-        assert_eq!(
-            accept.actor,
-            vocab::Reference::id(iri("https://example.com/users/alice"))
-        );
-        let vocab::Reference::Object(accepted_follow) = &accept.object else {
-            panic!("expected embedded Follow object");
-        };
-        assert_eq!(
-            accepted_follow.id,
-            iri("https://remote.example/activities/follow/1")
-        );
-    }
-
-    #[test]
-    fn received_follow_updates_existing_delivery_target_by_actor() {
-        let mut core = core();
-        let first_follow = vocab::Follow::new(
-            iri("https://remote.example/activities/follow/1"),
-            vocab::Reference::object(actor("https://remote.example/users/bob")),
-            vocab::Reference::id(iri("https://example.com/users/alice")),
-        );
-
-        let mut updated_actor = actor("https://remote.example/users/bob");
-        updated_actor.inbox = iri("https://remote.example/inboxes/bob");
-        let second_follow = vocab::Follow::new(
-            iri("https://remote.example/activities/follow/2"),
-            vocab::Reference::object(updated_actor),
-            vocab::Reference::id(iri("https://example.com/users/alice")),
-        );
-
-        let first_result = core.handle(received_follow(
-            first_follow,
-            "https://example.com/activities/accept/1",
-        ));
-        let second_result = core.handle(received_follow(
-            second_follow,
-            "https://example.com/activities/accept/2",
-        ));
-
-        assert_eq!(first_result.actions.len(), 3);
-        assert_eq!(second_result.actions.len(), 2);
-        assert_eq!(
-            second_result.actions[0],
-            Action::StoreDeliveryTarget(StoreDeliveryTarget {
-                target: DeliveryTarget {
-                    actor: iri("https://remote.example/users/bob"),
-                    inbox: iri("https://remote.example/inboxes/bob"),
-                },
-            })
-        );
-
-        let Action::SendActivity(send) = &second_result.actions[1] else {
-            panic!("expected SendActivity action");
-        };
-        assert_eq!(send.inbox, iri("https://remote.example/inboxes/bob"));
-
-        let Activity::Accept(accept) = &send.activity else {
-            panic!("expected Accept activity");
-        };
-        assert_eq!(accept.id, iri("https://example.com/activities/accept/2"));
-
-        assert_eq!(
-            core.state().followers(),
-            &[Follower {
-                follower: iri("https://remote.example/users/bob"),
-                following: iri("https://example.com/users/alice"),
-            }]
-        );
-        assert_eq!(
-            core.state().delivery_targets(),
-            &[DeliveryTarget {
-                actor: iri("https://remote.example/users/bob"),
-                inbox: iri("https://remote.example/inboxes/bob"),
-            }]
-        );
-    }
-
-    #[test]
-    fn received_follow_with_actor_id_records_follower_without_delivery_target() {
-        let mut core = core();
-        let follow = vocab::Follow::new(
-            iri("https://remote.example/activities/follow/1"),
-            vocab::Reference::id(iri("https://remote.example/users/bob")),
-            vocab::Reference::id(iri("https://example.com/users/alice")),
-        );
-
-        let result = core.handle(received_follow(
-            follow,
-            "https://example.com/activities/accept/1",
-        ));
-
-        assert_eq!(
-            result.actions,
-            Vec::from([Action::StoreFollower(StoreFollower {
-                follower: vocab::Reference::id(iri("https://remote.example/users/bob")),
-                following: vocab::Reference::id(iri("https://example.com/users/alice")),
-            })])
-        );
-        assert_eq!(
-            core.state().followers(),
-            &[Follower {
-                follower: iri("https://remote.example/users/bob"),
-                following: iri("https://example.com/users/alice"),
-            }]
-        );
-        assert!(core.state().delivery_targets().is_empty());
-    }
-
-    #[test]
-    fn received_follow_for_other_actor_is_ignored() {
-        let mut core = core();
-        let follow = vocab::Follow::new(
-            iri("https://remote.example/activities/follow/1"),
-            vocab::Reference::object(actor("https://remote.example/users/bob")),
-            vocab::Reference::id(iri("https://example.com/users/other")),
-        );
-
-        let result = core.handle(received_follow(
-            follow,
-            "https://example.com/activities/accept/1",
-        ));
-
-        assert!(result.is_empty());
-        assert!(core.state().followers().is_empty());
-        assert!(core.state().delivery_targets().is_empty());
     }
 
     #[test]
@@ -815,157 +515,6 @@ mod tests {
                 object: Object::Note(note.clone()),
             })
         );
-    }
-
-    #[test]
-    fn user_create_note_emits_create_activity_for_known_delivery_targets() {
-        let mut core = core();
-        let follow = vocab::Follow::new(
-            iri("https://remote.example/activities/follow/1"),
-            vocab::Reference::object(actor("https://remote.example/users/bob")),
-            vocab::Reference::id(iri("https://example.com/users/alice")),
-        );
-        let _ = core.handle(received_follow(
-            follow,
-            "https://example.com/activities/accept/1",
-        ));
-
-        let input = UserCreateNote {
-            note_id: iri("https://example.com/notes/1"),
-            create_id: iri("https://example.com/activities/create/1"),
-            actor: vocab::Reference::id(iri("https://example.com/users/alice")),
-            content: "Hello from Feder.".to_string(),
-            published: Some("2026-06-10T00:00:00Z".to_string()),
-        };
-
-        let result = core.handle(Input::UserCreateNote(input));
-
-        assert_eq!(result.actions.len(), 2);
-        let Action::StoreObject(store) = &result.actions[0] else {
-            panic!("expected StoreObject action");
-        };
-        let Object::Note(note) = &store.object;
-        assert_eq!(note.id, iri("https://example.com/notes/1"));
-
-        let Action::SendActivity(send) = &result.actions[1] else {
-            panic!("expected SendActivity action");
-        };
-        assert_eq!(send.inbox, iri("https://remote.example/users/bob/inbox"));
-
-        let Activity::CreateNote(create) = &send.activity else {
-            panic!("expected Create<Note> activity");
-        };
-        assert_eq!(create.id, iri("https://example.com/activities/create/1"));
-        assert_eq!(
-            create.actor,
-            vocab::Reference::id(iri("https://example.com/users/alice"))
-        );
-        let vocab::Reference::Object(created_note) = &create.object else {
-            panic!("expected embedded Note object");
-        };
-        assert_eq!(created_note.id, iri("https://example.com/notes/1"));
-    }
-
-    #[test]
-    fn user_create_note_emits_create_activity_for_each_known_delivery_target() {
-        let mut core = core();
-        for (index, follower) in [
-            "https://remote.example/users/bob",
-            "https://another.example/users/carol",
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let follow = vocab::Follow::new(
-                iri(&format!("https://example.com/activities/follow/{index}")),
-                vocab::Reference::object(actor(follower)),
-                vocab::Reference::id(iri("https://example.com/users/alice")),
-            );
-            let _ = core.handle(received_follow(
-                follow,
-                &format!("https://example.com/activities/accept/{index}"),
-            ));
-        }
-
-        let input = UserCreateNote {
-            note_id: iri("https://example.com/notes/1"),
-            create_id: iri("https://example.com/activities/create/1"),
-            actor: vocab::Reference::id(iri("https://example.com/users/alice")),
-            content: "Hello from Feder.".to_string(),
-            published: None,
-        };
-
-        let result = core.handle(Input::UserCreateNote(input));
-
-        assert_eq!(result.actions.len(), 3);
-        assert!(matches!(result.actions[0], Action::StoreObject(_)));
-
-        let expected_inboxes = [
-            iri("https://remote.example/users/bob/inbox"),
-            iri("https://another.example/users/carol/inbox"),
-        ];
-
-        for (action, expected_inbox) in result.actions[1..].iter().zip(expected_inboxes) {
-            let Action::SendActivity(send) = action else {
-                panic!("expected SendActivity action");
-            };
-            assert_eq!(send.inbox, expected_inbox);
-            assert!(matches!(send.activity, Activity::CreateNote(_)));
-        }
-    }
-
-    #[test]
-    fn mocked_core_flow_accepts_follow_then_delivers_created_note() {
-        let mut core = core();
-        let follow = vocab::Follow::new(
-            iri("https://remote.example/activities/follow/1"),
-            vocab::Reference::object(actor("https://remote.example/users/bob")),
-            vocab::Reference::id(iri("https://example.com/users/alice")),
-        );
-
-        let follow_result = core.handle(received_follow(
-            follow,
-            "https://example.com/activities/accept/1",
-        ));
-
-        assert_eq!(follow_result.actions.len(), 3);
-        assert!(matches!(follow_result.actions[0], Action::StoreFollower(_)));
-        assert!(matches!(
-            follow_result.actions[1],
-            Action::StoreDeliveryTarget(_)
-        ));
-        let Action::SendActivity(accept_delivery) = &follow_result.actions[2] else {
-            panic!("expected Accept delivery action");
-        };
-        assert_eq!(
-            accept_delivery.inbox,
-            iri("https://remote.example/users/bob/inbox")
-        );
-        assert!(matches!(accept_delivery.activity, Activity::Accept(_)));
-
-        let create_result = core.handle(Input::UserCreateNote(UserCreateNote {
-            note_id: iri("https://example.com/notes/1"),
-            create_id: iri("https://example.com/activities/create/1"),
-            actor: vocab::Reference::id(iri("https://example.com/users/alice")),
-            content: "Hello from Feder.".to_string(),
-            published: Some("2026-06-10T00:00:00Z".to_string()),
-        }));
-
-        assert_eq!(create_result.actions.len(), 2);
-        assert!(matches!(create_result.actions[0], Action::StoreObject(_)));
-        let Action::SendActivity(create_delivery) = &create_result.actions[1] else {
-            panic!("expected Create<Note> delivery action");
-        };
-        assert_eq!(
-            create_delivery.inbox,
-            iri("https://remote.example/users/bob/inbox")
-        );
-        assert!(matches!(create_delivery.activity, Activity::CreateNote(_)));
-
-        assert_eq!(core.state().followers().len(), 1);
-        assert_eq!(core.state().delivery_targets().len(), 1);
-        assert_eq!(core.state().objects().len(), 1);
-        assert_eq!(core.state().activities().len(), 1);
     }
 
     #[test]

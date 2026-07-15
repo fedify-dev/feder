@@ -197,6 +197,21 @@ mod tests {
         .await
     }
 
+    fn assert_no_stored_followers(app_state: &AppState) {
+        let followers = app_state
+            .store
+            .lock()
+            .expect("store lock")
+            .list_followers(
+                &"http://127.0.0.1:3000/users/alice"
+                    .parse()
+                    .expect("valid IRI"),
+            )
+            .expect("list followers");
+
+        assert!(followers.is_empty());
+    }
+
     #[tokio::test]
     async fn valid_follow_is_applied_through_storage_decision() {
         let app_state = AppState::from_config(test_config()).expect("build app state");
@@ -211,11 +226,6 @@ mod tests {
         .expect("accepted follow");
 
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-
-        let core = app_state.core.lock().expect("core lock");
-        assert!(core.state().followers().is_empty());
-        assert!(core.state().delivery_targets().is_empty());
-        drop(core);
 
         let store = app_state.store.lock().expect("store lock");
         let followers = store
@@ -256,15 +266,7 @@ mod tests {
         .expect_err("unsigned follow should be rejected");
 
         assert_eq!(error, StatusCode::UNAUTHORIZED);
-        assert!(
-            app_state
-                .core
-                .lock()
-                .expect("core lock")
-                .state()
-                .followers()
-                .is_empty()
-        );
+        assert_no_stored_followers(&app_state);
     }
 
     #[tokio::test]
@@ -281,15 +283,7 @@ mod tests {
         .expect_err("unknown inbox actor should be rejected");
 
         assert_eq!(error, StatusCode::NOT_FOUND);
-        assert!(
-            app_state
-                .core
-                .lock()
-                .expect("core lock")
-                .state()
-                .followers()
-                .is_empty()
-        );
+        assert_no_stored_followers(&app_state);
     }
 
     #[tokio::test]
@@ -303,15 +297,7 @@ mod tests {
             .expect_err("unsupported content type should be rejected");
 
         assert_eq!(error, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-        assert!(
-            app_state
-                .core
-                .lock()
-                .expect("core lock")
-                .state()
-                .followers()
-                .is_empty()
-        );
+        assert_no_stored_followers(&app_state);
     }
 
     #[tokio::test]
@@ -328,15 +314,7 @@ mod tests {
         .expect_err("malformed json should be rejected");
 
         assert_eq!(error, StatusCode::BAD_REQUEST);
-        assert!(
-            app_state
-                .core
-                .lock()
-                .expect("core lock")
-                .state()
-                .followers()
-                .is_empty()
-        );
+        assert_no_stored_followers(&app_state);
     }
 
     #[tokio::test]
@@ -361,15 +339,7 @@ mod tests {
             .expect("unsupported activity is accepted but ignored");
 
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        assert!(
-            app_state
-                .core
-                .lock()
-                .expect("core lock")
-                .state()
-                .followers()
-                .is_empty()
-        );
+        assert_no_stored_followers(&app_state);
     }
 
     #[tokio::test]
