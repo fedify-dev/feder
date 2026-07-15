@@ -15,4 +15,3 @@ Core decisions
 stored state + policy + context + ActivityPub input
     -> state changes + effects
 ~~~~
-

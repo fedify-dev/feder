@@ -22,23 +22,14 @@ use alloc::vec::Vec;
 
 pub use feder_vocab as vocab;
 
-/// Portable core state and decision logic.
-#[derive(Debug)]
-pub struct FederCore {
-    state: FederState,
-}
+/// Portable core decision logic.
+#[derive(Debug, Default)]
+pub struct FederCore;
 
 impl FederCore {
     #[must_use]
-    pub fn new(config: FederConfig) -> Self {
-        Self {
-            state: FederState::new(config),
-        }
-    }
-
-    #[must_use]
-    pub fn state(&self) -> &FederState {
-        &self.state
+    pub fn new() -> Self {
+        Self
     }
 
     pub fn decide_received_follow(
@@ -109,39 +100,6 @@ impl FederCore {
                 inbox,
             })]),
         })
-    }
-}
-
-/// Runtime-provided configuration for portable core state.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FederConfig {
-    pub local_actor: vocab::Actor,
-}
-
-impl FederConfig {
-    #[must_use]
-    pub fn new(local_actor: vocab::Actor) -> Self {
-        Self { local_actor }
-    }
-}
-
-/// In-memory state used by portable core flows.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FederState {
-    local_actor: vocab::Actor,
-}
-
-impl FederState {
-    #[must_use]
-    pub fn new(config: FederConfig) -> Self {
-        Self {
-            local_actor: config.local_actor,
-        }
-    }
-
-    #[must_use]
-    pub fn local_actor(&self) -> &vocab::Actor {
-        &self.local_actor
     }
 }
 
@@ -276,36 +234,4 @@ pub enum Activity {
 #[non_exhaustive]
 pub enum Object {
     Note(vocab::Note),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloc::format;
-
-    fn iri(value: &str) -> vocab::Iri {
-        value.parse().expect("valid test IRI")
-    }
-
-    fn actor(id: &str) -> vocab::Actor {
-        vocab::Actor::person(
-            iri(id),
-            iri(&format!("{id}/inbox")),
-            iri(&format!("{id}/outbox")),
-        )
-    }
-
-    fn core() -> FederCore {
-        FederCore::new(FederConfig::new(actor("https://example.com/users/alice")))
-    }
-
-    #[test]
-    fn core_is_created_with_local_actor_state() {
-        let core = core();
-
-        assert_eq!(
-            core.state().local_actor().id,
-            iri("https://example.com/users/alice")
-        );
-    }
 }

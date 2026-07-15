@@ -1,22 +1,15 @@
+use feder_core::vocab;
 use feder_core::{
-    Activity, CoreError, DecisionContext, Effect, FederConfig, FederCore, FollowPolicyDecision,
-    FollowRelationship, PlannedDelivery, ReceivedFollowState, RemoteActorState, StateChange, vocab,
+    Activity, CoreError, DecisionContext, Effect, FederCore, FollowPolicyDecision,
+    FollowRelationship, PlannedDelivery, ReceivedFollowState, RemoteActorState, StateChange,
 };
 
 fn iri(value: &str) -> vocab::Iri {
     value.parse().expect("valid test IRI")
 }
 
-fn actor(id: &str) -> vocab::Actor {
-    vocab::Actor::person(
-        iri(id),
-        iri(&format!("{id}/inbox")),
-        iri(&format!("{id}/outbox")),
-    )
-}
-
 fn core() -> FederCore {
-    FederCore::new(FederConfig::new(actor("https://example.com/users/alice")))
+    FederCore::new()
 }
 
 fn follow() -> vocab::Follow {
