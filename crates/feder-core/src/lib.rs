@@ -18,7 +18,7 @@
 
 extern crate alloc;
 
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
 
 pub use feder_vocab as vocab;
 
@@ -39,21 +39,6 @@ impl FederCore {
     #[must_use]
     pub fn state(&self) -> &FederState {
         &self.state
-    }
-
-    /// Handle one core input and return runtime actions to perform later.
-    ///
-    /// This method intentionally performs no I/O. Returned actions describe
-    /// work for a runtime or test harness to perform later.
-    #[must_use]
-    pub fn handle(&mut self, input: Input) -> HandleResult {
-        match input {
-            Input::ReceivedFollow(_) => HandleResult::default(),
-            Input::UserCreateNote(input) => {
-                let actions = self.state.record_created_note(input);
-                HandleResult::new(actions)
-            }
-        }
     }
 
     pub fn decide_received_follow(
@@ -144,8 +129,6 @@ impl FederConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederState {
     local_actor: vocab::Actor,
-    objects: Vec<Object>,
-    activities: Vec<Activity>,
 }
 
 impl FederState {
@@ -153,53 +136,12 @@ impl FederState {
     pub fn new(config: FederConfig) -> Self {
         Self {
             local_actor: config.local_actor,
-            objects: Vec::new(),
-            activities: Vec::new(),
         }
     }
 
     #[must_use]
     pub fn local_actor(&self) -> &vocab::Actor {
         &self.local_actor
-    }
-
-    #[must_use]
-    pub fn objects(&self) -> &[Object] {
-        &self.objects
-    }
-
-    #[must_use]
-    pub fn activities(&self) -> &[Activity] {
-        &self.activities
-    }
-
-    fn record_created_note(&mut self, input: UserCreateNote) -> Vec<Action> {
-        let Some(actor) = reference_id(&input.actor) else {
-            return Vec::new();
-        };
-
-        if actor != &self.local_actor.id {
-            return Vec::new();
-        }
-
-        let actor = vocab::Reference::id(self.local_actor.id.clone());
-
-        let mut note = vocab::Note::new(input.note_id);
-        note.attributed_to = Some(actor.clone());
-        note.content = Some(input.content);
-        note.published = input.published;
-
-        let create = vocab::Create::new(
-            input.create_id,
-            actor,
-            vocab::Reference::object(note.clone()),
-        );
-
-        let object = Object::Note(note);
-        self.objects.push(object.clone());
-        self.activities.push(Activity::CreateNote(create.clone()));
-
-        Vec::from([Action::StoreObject(StoreObject { object })])
     }
 }
 
@@ -220,43 +162,6 @@ trait HasId {
 impl HasId for vocab::Actor {
     fn id(&self) -> &vocab::Iri {
         &self.id
-    }
-}
-
-/// Something entering the portable core from a runtime.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum Input {
-    ReceivedFollow(ReceivedFollow),
-    UserCreateNote(UserCreateNote),
-}
-
-/// Runtime-provided data for handling a received Follow.
-///
-/// The Accept activity ID is an input so the core does not depend on clocks,
-/// randomness, or platform-specific ID generation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReceivedFollow {
-    pub follow: vocab::Follow,
-    pub accept_id: vocab::Iri,
-}
-
-/// Runtime-provided data for creating a local note.
-///
-/// IDs and timestamps are inputs so the core does not depend on clocks,
-/// randomness, or platform-specific ID generation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UserCreateNote {
-    pub note_id: vocab::Iri,
-    pub create_id: vocab::Iri,
-    pub actor: vocab::Reference<vocab::Actor>,
-    pub content: String,
-    pub published: Option<String>,
-}
-
-impl Input {
-    pub fn received_follow(follow: vocab::Follow, accept_id: vocab::Iri) -> Self {
-        Self::ReceivedFollow(ReceivedFollow { follow, accept_id })
     }
 }
 
@@ -361,54 +266,6 @@ pub enum CoreError {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Follower {
-    pub follower: vocab::Iri,
-    pub following: vocab::Iri,
-}
-
-/// A known actor inbox for future delivery.
-///
-/// Core records this only when an incoming object embeds enough actor data to
-/// expose an inbox. It does not imply every follower has been resolved.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DeliveryTarget {
-    pub actor: vocab::Iri,
-    pub inbox: vocab::Iri,
-}
-
-/// Something the runtime should perform after core handling.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum Action {
-    StoreFollower(StoreFollower),
-    StoreDeliveryTarget(StoreDeliveryTarget),
-    StoreObject(StoreObject),
-    SendActivity(SendActivity),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StoreFollower {
-    pub follower: vocab::Reference<vocab::Actor>,
-    pub following: vocab::Reference<vocab::Actor>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StoreDeliveryTarget {
-    pub target: DeliveryTarget,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StoreObject {
-    pub object: Object,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SendActivity {
-    pub activity: Activity,
-    pub inbox: vocab::Iri,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Activity {
     Accept(vocab::Accept),
@@ -421,28 +278,10 @@ pub enum Object {
     Note(vocab::Note),
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct HandleResult {
-    pub actions: Vec<Action>,
-}
-
-impl HandleResult {
-    #[must_use]
-    pub fn new(actions: Vec<Action>) -> Self {
-        Self { actions }
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.actions.is_empty()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use alloc::format;
-    use alloc::string::ToString;
 
     fn iri(value: &str) -> vocab::Iri {
         value.parse().expect("valid test IRI")
@@ -468,103 +307,5 @@ mod tests {
             core.state().local_actor().id,
             iri("https://example.com/users/alice")
         );
-        assert!(core.state().objects().is_empty());
-        assert!(core.state().activities().is_empty());
-    }
-
-    #[test]
-    fn user_create_note_records_created_object_and_emits_store_action() {
-        let input = UserCreateNote {
-            note_id: iri("https://example.com/notes/1"),
-            create_id: iri("https://example.com/activities/create/1"),
-            actor: vocab::Reference::id(iri("https://example.com/users/alice")),
-            content: "Hello from Feder.".to_string(),
-            published: Some("2026-06-10T00:00:00Z".to_string()),
-        };
-
-        let mut core = core();
-        let result = core.handle(Input::UserCreateNote(input));
-
-        assert_eq!(result.actions.len(), 1);
-        assert_eq!(core.state().objects().len(), 1);
-        assert_eq!(core.state().activities().len(), 1);
-
-        let Object::Note(note) = &core.state().objects()[0];
-        assert_eq!(note.id, iri("https://example.com/notes/1"));
-        assert_eq!(
-            note.attributed_to,
-            Some(vocab::Reference::id(iri("https://example.com/users/alice")))
-        );
-        assert_eq!(note.content, Some("Hello from Feder.".to_string()));
-        assert_eq!(note.published, Some("2026-06-10T00:00:00Z".to_string()));
-
-        match &core.state().activities()[0] {
-            Activity::CreateNote(create) => {
-                assert_eq!(create.id, iri("https://example.com/activities/create/1"));
-                assert_eq!(
-                    create.actor,
-                    vocab::Reference::id(iri("https://example.com/users/alice"))
-                );
-            }
-            Activity::Accept(_) => panic!("expected Create<Note> activity"),
-        }
-
-        assert_eq!(
-            result.actions[0],
-            Action::StoreObject(StoreObject {
-                object: Object::Note(note.clone()),
-            })
-        );
-    }
-
-    #[test]
-    fn user_create_note_normalizes_embedded_local_actor_to_local_actor_id() {
-        let mut supplied_actor = actor("https://example.com/users/alice");
-        supplied_actor.inbox = iri("https://untrusted.example/inbox");
-
-        let input = UserCreateNote {
-            note_id: iri("https://example.com/notes/1"),
-            create_id: iri("https://example.com/activities/create/1"),
-            actor: vocab::Reference::object(supplied_actor),
-            content: "Hello from Feder.".to_string(),
-            published: None,
-        };
-
-        let mut core = core();
-        let result = core.handle(Input::UserCreateNote(input));
-
-        assert_eq!(result.actions.len(), 1);
-
-        let Object::Note(note) = &core.state().objects()[0];
-        assert_eq!(
-            note.attributed_to,
-            Some(vocab::Reference::id(iri("https://example.com/users/alice")))
-        );
-
-        let Activity::CreateNote(create) = &core.state().activities()[0] else {
-            panic!("expected Create<Note> activity");
-        };
-        assert_eq!(
-            create.actor,
-            vocab::Reference::id(iri("https://example.com/users/alice"))
-        );
-    }
-
-    #[test]
-    fn user_create_note_for_non_local_actor_is_ignored() {
-        let input = UserCreateNote {
-            note_id: iri("https://remote.example/notes/1"),
-            create_id: iri("https://remote.example/activities/create/1"),
-            actor: vocab::Reference::id(iri("https://remote.example/users/bob")),
-            content: "Hello from elsewhere.".to_string(),
-            published: Some("2026-06-10T00:00:00Z".to_string()),
-        };
-
-        let mut core = core();
-        let result = core.handle(Input::UserCreateNote(input));
-
-        assert!(result.is_empty());
-        assert!(core.state().objects().is_empty());
-        assert!(core.state().activities().is_empty());
     }
 }

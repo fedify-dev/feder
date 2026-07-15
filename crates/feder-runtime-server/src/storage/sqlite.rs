@@ -16,8 +16,8 @@
 use std::path::Path;
 
 use feder_core::{
-    Action, Activity, Decision, Effect, FollowRelationship, Object, ReceivedFollowState,
-    RemoteActorState, StateChange,
+    Activity, Decision, Effect, FollowRelationship, Object, ReceivedFollowState, RemoteActorState,
+    StateChange,
 };
 use feder_vocab::{Actor, Iri, Reference};
 use rusqlite::{Connection, Transaction, params};
@@ -90,60 +90,6 @@ impl SqliteStore {
 }
 
 impl RuntimeStore for SqliteStore {
-    fn persist_actions(&mut self, actions: &[Action]) -> Result<(), StoreError> {
-        let tx = self.conn.transaction()?;
-
-        for action in actions {
-            match action {
-                Action::StoreFollower(action) => {
-                    let follower = actor_reference_id(&action.follower);
-                    let following = actor_reference_id(&action.following);
-                    let inbox = actor_reference_inbox(&action.follower);
-                    let shared_inbox = actor_reference_shared_inbox(&action.follower);
-
-                    tx.execute(
-                        r#"
-                    INSERT INTO followers (
-                        follower_actor_id,
-                        following_actor_id,
-                        inbox_url,
-                        shared_inbox_url
-                    )
-                    VALUES (?1, ?2, ?3, ?4)
-                    ON CONFLICT(follower_actor_id, following_actor_id) DO UPDATE SET
-                        inbox_url = COALESCE(excluded.inbox_url, followers.inbox_url),
-                        shared_inbox_url = COALESCE(
-                            excluded.shared_inbox_url,
-                            followers.shared_inbox_url
-                        )
-                    "#,
-                        params![
-                            follower.as_str(),
-                            following.as_str(),
-                            inbox.map(|inbox| inbox.as_str()),
-                            shared_inbox.map(|shared_inbox| shared_inbox.as_str()),
-                        ],
-                    )?;
-                }
-                Action::StoreDeliveryTarget(action) => {
-                    tx.execute(
-                        r#"
-                        UPDATE followers
-                        SET inbox_url = ?2
-                        WHERE follower_actor_id = ?1
-                        "#,
-                        params![action.target.actor.as_str(), action.target.inbox.as_str()],
-                    )?;
-                }
-                _ => {}
-            }
-        }
-
-        tx.commit()?;
-
-        Ok(())
-    }
-
     fn apply_decision(&mut self, decision: &Decision) -> Result<(), StoreError> {
         let tx = self.conn.transaction()?;
 
@@ -457,8 +403,7 @@ fn parse_optional_iri(value: Option<String>) -> Result<Option<Iri>, StoreError> 
 #[cfg(test)]
 mod tests {
     use feder_core::{
-        Action, Activity, Decision, Effect, FollowRelationship, PlannedDelivery, StateChange,
-        StoreFollower,
+        Activity, Decision, Effect, FollowRelationship, PlannedDelivery, StateChange,
     };
 
     use super::*;
@@ -467,11 +412,30 @@ mod tests {
         value.parse().expect("valid test IRI")
     }
 
-    fn store_follower_action() -> Action {
-        Action::StoreFollower(StoreFollower {
-            follower: Reference::id(iri("https://remote.example/users/bob")),
-            following: Reference::id(iri("https://example.com/users/alice")),
-        })
+    fn add_follower_decision(
+        remote_actor: &str,
+        local_actor: &str,
+        inbox: Option<&str>,
+        shared_inbox: Option<&str>,
+    ) -> Decision {
+        Decision {
+            state_changes: vec![StateChange::AddFollower {
+                local_actor: iri(local_actor),
+                remote_actor: iri(remote_actor),
+                inbox: inbox.map(iri),
+                shared_inbox: shared_inbox.map(iri),
+            }],
+            effects: Vec::new(),
+        }
+    }
+
+    fn bob_follows_alice_decision() -> Decision {
+        add_follower_decision(
+            "https://remote.example/users/bob",
+            "https://example.com/users/alice",
+            None,
+            None,
+        )
     }
 
     fn actor(id: &str) -> Actor {
@@ -501,12 +465,12 @@ mod tests {
     }
 
     #[test]
-    fn persist_actions_stores_follower() {
+    fn apply_decision_stores_follower() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
 
         store
-            .persist_actions(&[store_follower_action()])
-            .expect("persist follower action");
+            .apply_decision(&bob_follows_alice_decision())
+            .expect("apply follower decision");
 
         let (follower, following): (String, String) = store
             .conn
@@ -522,16 +486,16 @@ mod tests {
     }
 
     #[test]
-    fn persist_actions_ignores_duplicate_follower() {
+    fn apply_decision_ignores_duplicate_follower() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
-        let action = store_follower_action();
+        let decision = bob_follows_alice_decision();
 
         store
-            .persist_actions(&[action.clone()])
-            .expect("persist follower action first time");
+            .apply_decision(&decision)
+            .expect("apply follower decision first time");
         store
-            .persist_actions(&[action])
-            .expect("persist follower action second time");
+            .apply_decision(&decision)
+            .expect("apply follower decision second time");
 
         let follower_count: i64 = store
             .conn
@@ -542,22 +506,20 @@ mod tests {
     }
 
     #[test]
-    fn persist_actions_updates_follower_inbox_from_delivery_target() {
+    fn apply_decision_updates_follower_inbox() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
 
         store
-            .persist_actions(&[store_follower_action()])
-            .expect("persist ID-only follower action");
+            .apply_decision(&bob_follows_alice_decision())
+            .expect("apply ID-only follower decision");
         store
-            .persist_actions(&[Action::StoreDeliveryTarget(
-                feder_core::StoreDeliveryTarget {
-                    target: feder_core::DeliveryTarget {
-                        actor: iri("https://remote.example/users/bob"),
-                        inbox: iri("https://remote.example/users/bob/updated-inbox"),
-                    },
-                },
-            )])
-            .expect("persist delivery target action");
+            .apply_decision(&add_follower_decision(
+                "https://remote.example/users/bob",
+                "https://example.com/users/alice",
+                Some("https://remote.example/users/bob/updated-inbox"),
+                None,
+            ))
+            .expect("apply updated follower decision");
 
         let recipients = store
             .list_follower_recipients(&iri("https://example.com/users/alice"))
@@ -702,16 +664,14 @@ mod tests {
     #[test]
     fn load_received_follow_state_returns_existing_relationship_from_storage() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
-        let mut follower = actor("https://remote.example/users/bob");
-        follower.endpoints = Some(feder_vocab::Endpoints {
-            shared_inbox: Some(iri("https://remote.example/inbox")),
-        });
         store
-            .persist_actions(&[Action::StoreFollower(StoreFollower {
-                follower: Reference::object(follower),
-                following: Reference::id(iri("https://example.com/users/alice")),
-            })])
-            .expect("persist follower");
+            .apply_decision(&add_follower_decision(
+                "https://remote.example/users/bob",
+                "https://example.com/users/alice",
+                Some("https://remote.example/users/bob/inbox"),
+                Some("https://remote.example/inbox"),
+            ))
+            .expect("apply follower decision");
 
         let state = store
             .load_received_follow_state(
@@ -735,11 +695,13 @@ mod tests {
     fn load_received_follow_state_prefers_embedded_actor_endpoints() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
         store
-            .persist_actions(&[Action::StoreFollower(StoreFollower {
-                follower: Reference::object(actor("https://remote.example/users/bob")),
-                following: Reference::id(iri("https://example.com/users/alice")),
-            })])
-            .expect("persist follower");
+            .apply_decision(&add_follower_decision(
+                "https://remote.example/users/bob",
+                "https://example.com/users/alice",
+                Some("https://remote.example/users/bob/inbox"),
+                None,
+            ))
+            .expect("apply follower decision");
 
         let mut updated_actor = actor("https://remote.example/users/bob");
         updated_actor.inbox = iri("https://remote.example/users/bob/updated-inbox");
@@ -790,8 +752,8 @@ mod tests {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
 
         store
-            .persist_actions(&[store_follower_action()])
-            .expect("persist follower action");
+            .apply_decision(&bob_follows_alice_decision())
+            .expect("apply follower decision");
 
         let followers = store
             .list_followers(&iri("https://example.com/users/alice"))
@@ -811,18 +773,15 @@ mod tests {
     #[test]
     fn list_followers_returns_follower_inbox() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
-        let mut follower = actor("https://remote.example/users/bob");
-        follower.endpoints = Some(feder_vocab::Endpoints {
-            shared_inbox: Some(iri("https://remote.example/inbox")),
-        });
-        let action = Action::StoreFollower(StoreFollower {
-            follower: Reference::object(follower),
-            following: Reference::id(iri("https://example.com/users/alice")),
-        });
 
         store
-            .persist_actions(&[action])
-            .expect("persist follower action");
+            .apply_decision(&add_follower_decision(
+                "https://remote.example/users/bob",
+                "https://example.com/users/alice",
+                Some("https://remote.example/users/bob/inbox"),
+                Some("https://remote.example/inbox"),
+            ))
+            .expect("apply follower decision");
 
         let followers = store
             .list_followers(&iri("https://example.com/users/alice"))
@@ -842,18 +801,26 @@ mod tests {
     #[test]
     fn list_followers_returns_only_followers_for_actor() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
-        let bob_follows_alice = Action::StoreFollower(StoreFollower {
-            follower: Reference::id(iri("https://remote.example/users/bob")),
-            following: Reference::id(iri("https://example.com/users/alice")),
-        });
-        let carol_follows_eve = Action::StoreFollower(StoreFollower {
-            follower: Reference::id(iri("https://remote.example/users/carol")),
-            following: Reference::id(iri("https://example.com/users/eve")),
-        });
 
         store
-            .persist_actions(&[bob_follows_alice, carol_follows_eve])
-            .expect("persist follower actions");
+            .apply_decision(&Decision {
+                state_changes: vec![
+                    StateChange::AddFollower {
+                        local_actor: iri("https://example.com/users/alice"),
+                        remote_actor: iri("https://remote.example/users/bob"),
+                        inbox: None,
+                        shared_inbox: None,
+                    },
+                    StateChange::AddFollower {
+                        local_actor: iri("https://example.com/users/eve"),
+                        remote_actor: iri("https://remote.example/users/carol"),
+                        inbox: None,
+                        shared_inbox: None,
+                    },
+                ],
+                effects: Vec::new(),
+            })
+            .expect("apply follower decisions");
 
         let followers = store
             .list_followers(&iri("https://example.com/users/alice"))
@@ -873,22 +840,26 @@ mod tests {
     #[test]
     fn list_follower_recipients_returns_followers_with_inboxes() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
-        let mut follower = actor("https://remote.example/users/bob");
-        follower.endpoints = Some(feder_vocab::Endpoints {
-            shared_inbox: Some(iri("https://remote.example/inbox")),
-        });
-        let follower_with_inbox = Action::StoreFollower(StoreFollower {
-            follower: Reference::object(follower),
-            following: Reference::id(iri("https://example.com/users/alice")),
-        });
-        let follower_without_inbox = Action::StoreFollower(StoreFollower {
-            follower: Reference::id(iri("https://remote.example/users/carol")),
-            following: Reference::id(iri("https://example.com/users/alice")),
-        });
 
         store
-            .persist_actions(&[follower_with_inbox, follower_without_inbox])
-            .expect("persist follower actions");
+            .apply_decision(&Decision {
+                state_changes: vec![
+                    StateChange::AddFollower {
+                        local_actor: iri("https://example.com/users/alice"),
+                        remote_actor: iri("https://remote.example/users/bob"),
+                        inbox: Some(iri("https://remote.example/users/bob/inbox")),
+                        shared_inbox: Some(iri("https://remote.example/inbox")),
+                    },
+                    StateChange::AddFollower {
+                        local_actor: iri("https://example.com/users/alice"),
+                        remote_actor: iri("https://remote.example/users/carol"),
+                        inbox: None,
+                        shared_inbox: None,
+                    },
+                ],
+                effects: Vec::new(),
+            })
+            .expect("apply follower decisions");
 
         let recipients = store
             .list_follower_recipients(&iri("https://example.com/users/alice"))
@@ -907,18 +878,26 @@ mod tests {
     #[test]
     fn list_follower_recipients_returns_only_recipients_for_actor() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
-        let bob_follows_alice = Action::StoreFollower(StoreFollower {
-            follower: Reference::object(actor("https://remote.example/users/bob")),
-            following: Reference::id(iri("https://example.com/users/alice")),
-        });
-        let carol_follows_eve = Action::StoreFollower(StoreFollower {
-            follower: Reference::object(actor("https://remote.example/users/carol")),
-            following: Reference::id(iri("https://example.com/users/eve")),
-        });
 
         store
-            .persist_actions(&[bob_follows_alice, carol_follows_eve])
-            .expect("persist follower actions");
+            .apply_decision(&Decision {
+                state_changes: vec![
+                    StateChange::AddFollower {
+                        local_actor: iri("https://example.com/users/alice"),
+                        remote_actor: iri("https://remote.example/users/bob"),
+                        inbox: Some(iri("https://remote.example/users/bob/inbox")),
+                        shared_inbox: None,
+                    },
+                    StateChange::AddFollower {
+                        local_actor: iri("https://example.com/users/eve"),
+                        remote_actor: iri("https://remote.example/users/carol"),
+                        inbox: Some(iri("https://remote.example/users/carol/inbox")),
+                        shared_inbox: None,
+                    },
+                ],
+                effects: Vec::new(),
+            })
+            .expect("apply follower decisions");
 
         let recipients = store
             .list_follower_recipients(&iri("https://example.com/users/alice"))

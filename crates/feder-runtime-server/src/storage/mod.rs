@@ -15,7 +15,7 @@
 
 pub mod sqlite;
 
-use feder_core::{Action, Decision, ReceivedFollowState};
+use feder_core::{Decision, ReceivedFollowState};
 use feder_vocab::Follow;
 use feder_vocab::Iri;
 pub use sqlite::SqliteStore;
@@ -51,8 +51,6 @@ pub enum StoreError {
 }
 
 pub trait RuntimeStore {
-    fn persist_actions(&mut self, actions: &[Action]) -> Result<(), StoreError>;
-
     fn apply_decision(&mut self, decision: &Decision) -> Result<(), StoreError>;
 
     fn load_received_follow_state(
