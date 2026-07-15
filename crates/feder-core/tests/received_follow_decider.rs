@@ -142,30 +142,66 @@ fn already_processed_activity_is_idempotent() {
 }
 
 #[test]
-fn existing_follower_is_not_added_again() {
+fn existing_follower_endpoint_metadata_is_refreshed() {
     let decision = core()
         .decide_received_follow(
             follow(),
             received_follow_state(
                 FollowRelationship::Following,
-                Some("https://remote.example/users/bob/inbox"),
-                None,
+                Some("https://remote.example/users/bob/new-inbox"),
+                Some("https://remote.example/shared-inbox"),
             ),
             FollowPolicyDecision::Accept,
             decision_context(),
         )
         .expect("follow decision succeeds");
 
-    assert_eq!(decision.state_changes.len(), 2);
-    assert!(matches!(
-        decision.state_changes[0],
-        StateChange::RecordProcessedActivity { .. }
-    ));
-    assert!(matches!(
+    assert_eq!(
         decision.state_changes[1],
-        StateChange::StoreActivity { .. }
-    ));
+        StateChange::AddFollower {
+            local_actor: iri("https://example.com/users/alice"),
+            remote_actor: iri("https://remote.example/users/bob"),
+            inbox: Some(iri("https://remote.example/users/bob/new-inbox")),
+            shared_inbox: Some(iri("https://remote.example/shared-inbox")),
+        }
+    );
     assert_eq!(decision.effects.len(), 1);
+}
+
+#[test]
+fn existing_follower_can_refresh_to_shared_inbox_only() {
+    let decision = core()
+        .decide_received_follow(
+            follow(),
+            received_follow_state(
+                FollowRelationship::Following,
+                None,
+                Some("https://remote.example/shared-inbox"),
+            ),
+            FollowPolicyDecision::Accept,
+            decision_context(),
+        )
+        .expect("follow decision succeeds");
+
+    assert_eq!(
+        decision.state_changes[1],
+        StateChange::AddFollower {
+            local_actor: iri("https://example.com/users/alice"),
+            remote_actor: iri("https://remote.example/users/bob"),
+            inbox: None,
+            shared_inbox: Some(iri("https://remote.example/shared-inbox")),
+        }
+    );
+    assert_eq!(
+        decision.effects,
+        [Effect::PlanDelivery(PlannedDelivery {
+            activity: match &decision.state_changes[2] {
+                StateChange::StoreActivity { activity } => activity.clone(),
+                _ => panic!("expected stored Accept activity"),
+            },
+            inbox: iri("https://remote.example/shared-inbox"),
+        })]
+    );
 }
 
 #[test]

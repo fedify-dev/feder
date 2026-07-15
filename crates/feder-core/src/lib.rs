@@ -80,14 +80,12 @@ impl FederCore {
             activity_id: follow.id.clone(),
         }]);
 
-        if state.relationship == FollowRelationship::NotFollowing {
-            state_changes.push(StateChange::AddFollower {
-                local_actor: context.local_actor,
-                remote_actor: follower,
-                inbox: remote_actor.inbox,
-                shared_inbox: remote_actor.shared_inbox,
-            });
-        }
+        state_changes.push(StateChange::AddFollower {
+            local_actor: context.local_actor,
+            remote_actor: follower,
+            inbox: remote_actor.inbox,
+            shared_inbox: remote_actor.shared_inbox,
+        });
 
         state_changes.push(StateChange::StoreActivity {
             activity: accept.clone(),

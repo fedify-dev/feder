@@ -111,10 +111,12 @@ pub async fn inbox(
         accept_id,
     };
 
-    let state = app_state
+    let mut store = app_state
         .store
         .lock()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let state = store
         .load_received_follow_state(&follow, &app_state.local_actor.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -122,10 +124,7 @@ pub async fn inbox(
         .decide_received_follow(follow, state, FollowPolicyDecision::Accept, context)
         .map_err(status_for_core_error)?;
 
-    app_state
-        .store
-        .lock()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    store
         .apply_decision(&decision)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -290,6 +289,40 @@ mod tests {
 
         assert_eq!(first_response.status(), StatusCode::ACCEPTED);
         assert_eq!(second_response.status(), StatusCode::ACCEPTED);
+
+        let followers = app_state
+            .store
+            .lock()
+            .expect("store lock")
+            .list_followers(&local_actor_id())
+            .expect("list followers");
+
+        assert_eq!(followers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_duplicate_follow_is_idempotent() {
+        let app_state = AppState::from_config(test_config()).expect("build app state");
+        let body = follow_body();
+
+        let (first_response, second_response) = tokio::join!(
+            post_inbox(
+                app_state.clone(),
+                "alice",
+                activity_json_headers(),
+                body.clone(),
+            ),
+            post_inbox(app_state.clone(), "alice", activity_json_headers(), body),
+        );
+
+        assert_eq!(
+            first_response.expect("accepted first follow").status(),
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(
+            second_response.expect("accepted duplicate follow").status(),
+            StatusCode::ACCEPTED
+        );
 
         let followers = app_state
             .store
