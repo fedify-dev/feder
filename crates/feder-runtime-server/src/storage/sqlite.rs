@@ -15,9 +15,12 @@
 
 use std::path::Path;
 
-use feder_core::{Action, FollowRelationship, ReceivedFollowState, RemoteActorState};
+use feder_core::{
+    Action, Activity, Decision, Effect, FollowRelationship, Object, ReceivedFollowState,
+    RemoteActorState, StateChange,
+};
 use feder_vocab::{Actor, Iri, Reference};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Transaction, params};
 
 use crate::storage::{RuntimeStore, StoreError, StoredFollower, StoredRecipient};
 
@@ -61,6 +64,23 @@ impl SqliteStore {
 
             CREATE TABLE IF NOT EXISTS processed_inbox_activities (
                 activity_id TEXT PRIMARY KEY
+            );
+
+            CREATE TABLE IF NOT EXISTS activities (
+                activity_id TEXT PRIMARY KEY,
+                activity_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS objects (
+                object_id TEXT PRIMARY KEY,
+                object_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS outgoing_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                activity_id TEXT NOT NULL,
+                activity_json TEXT NOT NULL,
+                inbox_url TEXT NOT NULL
             );
             "#,
         )?;
@@ -117,6 +137,22 @@ impl RuntimeStore for SqliteStore {
                 }
                 _ => {}
             }
+        }
+
+        tx.commit()?;
+
+        Ok(())
+    }
+
+    fn apply_decision(&mut self, decision: &Decision) -> Result<(), StoreError> {
+        let tx = self.conn.transaction()?;
+
+        for change in &decision.state_changes {
+            apply_state_change(&tx, change)?;
+        }
+
+        for effect in &decision.effects {
+            apply_effect(&tx, effect)?;
         }
 
         tx.commit()?;
@@ -258,6 +294,132 @@ impl SqliteStore {
     }
 }
 
+fn apply_state_change(tx: &Transaction<'_>, change: &StateChange) -> Result<(), StoreError> {
+    match change {
+        StateChange::RecordProcessedActivity { activity_id } => {
+            tx.execute(
+                "INSERT INTO processed_inbox_activities (activity_id) VALUES (?1)",
+                [activity_id.as_str()],
+            )?;
+        }
+        StateChange::AddFollower {
+            local_actor,
+            remote_actor,
+            inbox,
+            shared_inbox,
+        } => {
+            tx.execute(
+                r#"
+                INSERT INTO followers (
+                    follower_actor_id,
+                    following_actor_id,
+                    inbox_url,
+                    shared_inbox_url
+                )
+                VALUES (?1, ?2, ?3, ?4)
+                ON CONFLICT(follower_actor_id, following_actor_id) DO UPDATE SET
+                    inbox_url = COALESCE(excluded.inbox_url, followers.inbox_url),
+                    shared_inbox_url = COALESCE(
+                        excluded.shared_inbox_url,
+                        followers.shared_inbox_url
+                    )
+                "#,
+                params![
+                    remote_actor.as_str(),
+                    local_actor.as_str(),
+                    inbox.as_ref().map(|inbox| inbox.as_str()),
+                    shared_inbox
+                        .as_ref()
+                        .map(|shared_inbox| shared_inbox.as_str()),
+                ],
+            )?;
+        }
+        StateChange::StoreActivity { activity } => {
+            let activity_id = activity_id(activity)?;
+            tx.execute(
+                r#"
+                INSERT INTO activities (activity_id, activity_json)
+                VALUES (?1, ?2)
+                ON CONFLICT(activity_id) DO UPDATE SET
+                    activity_json = excluded.activity_json
+                "#,
+                params![activity_id.as_str(), serialize_activity(activity)?],
+            )?;
+        }
+        StateChange::StoreObject { object } => {
+            let object_id = object_id(object)?;
+            tx.execute(
+                r#"
+                INSERT INTO objects (object_id, object_json)
+                VALUES (?1, ?2)
+                ON CONFLICT(object_id) DO UPDATE SET
+                    object_json = excluded.object_json
+                "#,
+                params![object_id.as_str(), serialize_object(object)?],
+            )?;
+        }
+        _ => return Err(StoreError::UnsupportedDecisionValue("state change")),
+    }
+
+    Ok(())
+}
+
+fn apply_effect(tx: &Transaction<'_>, effect: &Effect) -> Result<(), StoreError> {
+    match effect {
+        Effect::PlanDelivery(delivery) => {
+            let activity_id = activity_id(&delivery.activity)?;
+            tx.execute(
+                r#"
+                INSERT INTO outgoing_deliveries (
+                    activity_id,
+                    activity_json,
+                    inbox_url
+                )
+                VALUES (?1, ?2, ?3)
+                "#,
+                params![
+                    activity_id.as_str(),
+                    serialize_activity(&delivery.activity)?,
+                    delivery.inbox.as_str(),
+                ],
+            )?;
+        }
+        _ => return Err(StoreError::UnsupportedDecisionValue("effect")),
+    }
+
+    Ok(())
+}
+
+fn activity_id(activity: &Activity) -> Result<&Iri, StoreError> {
+    match activity {
+        Activity::Accept(activity) => Ok(&activity.id),
+        Activity::CreateNote(activity) => Ok(&activity.id),
+        _ => Err(StoreError::UnsupportedDecisionValue("activity")),
+    }
+}
+
+fn object_id(object: &Object) -> Result<&Iri, StoreError> {
+    match object {
+        Object::Note(object) => Ok(&object.id),
+        _ => Err(StoreError::UnsupportedDecisionValue("object")),
+    }
+}
+
+fn serialize_activity(activity: &Activity) -> Result<String, StoreError> {
+    match activity {
+        Activity::Accept(activity) => Ok(serde_json::to_string(activity)?),
+        Activity::CreateNote(activity) => Ok(serde_json::to_string(activity)?),
+        _ => Err(StoreError::UnsupportedDecisionValue("activity")),
+    }
+}
+
+fn serialize_object(object: &Object) -> Result<String, StoreError> {
+    match object {
+        Object::Note(object) => Ok(serde_json::to_string(object)?),
+        _ => Err(StoreError::UnsupportedDecisionValue("object")),
+    }
+}
+
 fn actor_reference_id(reference: &Reference<Actor>) -> &Iri {
     match reference {
         Reference::Id(id) => id,
@@ -294,7 +456,10 @@ fn parse_optional_iri(value: Option<String>) -> Result<Option<Iri>, StoreError> 
 
 #[cfg(test)]
 mod tests {
-    use feder_core::{Action, FollowRelationship, StoreFollower};
+    use feder_core::{
+        Action, Activity, Decision, Effect, FollowRelationship, PlannedDelivery, StateChange,
+        StoreFollower,
+    };
 
     use super::*;
 
@@ -323,6 +488,16 @@ mod tests {
             actor,
             Reference::id(iri("https://example.com/users/alice")),
         )
+    }
+
+    fn accept_activity() -> Activity {
+        Activity::Accept(feder_vocab::Accept::new(
+            iri("https://example.com/activities/accept-1"),
+            Reference::id(iri("https://example.com/users/alice")),
+            Reference::object(follow(Reference::id(iri(
+                "https://remote.example/users/bob",
+            )))),
+        ))
     }
 
     #[test]
@@ -395,6 +570,109 @@ mod tests {
                 inbox: iri("https://remote.example/users/bob/updated-inbox"),
                 shared_inbox: None,
             }]
+        );
+    }
+
+    #[test]
+    fn apply_decision_persists_state_changes_and_queues_delivery() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let activity = accept_activity();
+        let decision = Decision {
+            state_changes: vec![
+                StateChange::RecordProcessedActivity {
+                    activity_id: iri("https://remote.example/activities/follow-1"),
+                },
+                StateChange::AddFollower {
+                    local_actor: iri("https://example.com/users/alice"),
+                    remote_actor: iri("https://remote.example/users/bob"),
+                    inbox: Some(iri("https://remote.example/users/bob/inbox")),
+                    shared_inbox: Some(iri("https://remote.example/inbox")),
+                },
+                StateChange::StoreActivity {
+                    activity: activity.clone(),
+                },
+            ],
+            effects: vec![Effect::PlanDelivery(PlannedDelivery {
+                activity,
+                inbox: iri("https://remote.example/inbox"),
+            })],
+        };
+
+        store
+            .apply_decision(&decision)
+            .expect("apply core decision");
+
+        let state = store
+            .load_received_follow_state(
+                &follow(Reference::id(iri("https://remote.example/users/bob"))),
+                &iri("https://example.com/users/alice"),
+            )
+            .expect("load received follow state");
+        assert!(state.already_processed);
+        assert_eq!(state.relationship, FollowRelationship::Following);
+        assert_eq!(
+            state.remote_actor.expect("remote actor state").shared_inbox,
+            Some(iri("https://remote.example/inbox"))
+        );
+
+        let stored_activity_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM activities", [], |row| row.get(0))
+            .expect("count stored activities");
+        let delivery_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM outgoing_deliveries", [], |row| {
+                row.get(0)
+            })
+            .expect("count queued deliveries");
+        let delivery_inbox: String = store
+            .conn
+            .query_row("SELECT inbox_url FROM outgoing_deliveries", [], |row| {
+                row.get(0)
+            })
+            .expect("query queued delivery inbox");
+
+        assert_eq!(stored_activity_count, 1);
+        assert_eq!(delivery_count, 1);
+        assert_eq!(delivery_inbox, "https://remote.example/inbox");
+    }
+
+    #[test]
+    fn apply_decision_rolls_back_when_one_state_change_fails() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        store
+            .conn
+            .execute(
+                "INSERT INTO processed_inbox_activities (activity_id) VALUES (?1)",
+                ["https://remote.example/activities/follow-1"],
+            )
+            .expect("insert processed inbox activity");
+
+        let decision = Decision {
+            state_changes: vec![
+                StateChange::AddFollower {
+                    local_actor: iri("https://example.com/users/alice"),
+                    remote_actor: iri("https://remote.example/users/bob"),
+                    inbox: Some(iri("https://remote.example/users/bob/inbox")),
+                    shared_inbox: None,
+                },
+                StateChange::RecordProcessedActivity {
+                    activity_id: iri("https://remote.example/activities/follow-1"),
+                },
+            ],
+            effects: Vec::new(),
+        };
+
+        let err = store
+            .apply_decision(&decision)
+            .expect_err("duplicate processed activity should fail");
+
+        assert!(matches!(err, StoreError::Sqlite(_)));
+        assert!(
+            store
+                .list_followers(&iri("https://example.com/users/alice"))
+                .expect("list followers")
+                .is_empty()
         );
     }
 
