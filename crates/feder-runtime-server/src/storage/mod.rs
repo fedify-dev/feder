@@ -15,7 +15,8 @@
 
 pub mod sqlite;
 
-use feder_core::Action;
+use feder_core::{Action, ReceivedFollowState};
+use feder_vocab::Follow;
 use feder_vocab::Iri;
 pub use sqlite::SqliteStore;
 
@@ -48,6 +49,12 @@ pub enum StoreError {
 
 pub trait RuntimeStore {
     fn persist_actions(&mut self, actions: &[Action]) -> Result<(), StoreError>;
+
+    fn load_received_follow_state(
+        &self,
+        follow: &Follow,
+        local_actor_id: &Iri,
+    ) -> Result<ReceivedFollowState, StoreError>;
 
     fn list_followers(&self, actor_id: &Iri) -> Result<Vec<StoredFollower>, StoreError>;
 

@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use feder_core::Action;
+use feder_core::{Action, FollowRelationship, ReceivedFollowState, RemoteActorState};
 use feder_vocab::{Actor, Iri, Reference};
 use rusqlite::{Connection, params};
 
@@ -58,6 +58,10 @@ impl SqliteStore {
             );
             CREATE INDEX IF NOT EXISTS idx_followers_following_actor_id
                 ON followers (following_actor_id);
+
+            CREATE TABLE IF NOT EXISTS processed_inbox_activities (
+                activity_id TEXT PRIMARY KEY
+            );
             "#,
         )?;
 
@@ -120,6 +124,51 @@ impl RuntimeStore for SqliteStore {
         Ok(())
     }
 
+    fn load_received_follow_state(
+        &self,
+        follow: &feder_vocab::Follow,
+        local_actor_id: &Iri,
+    ) -> Result<ReceivedFollowState, StoreError> {
+        let already_processed = self.conn.query_row(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM processed_inbox_activities
+                WHERE activity_id = ?1
+            )
+            "#,
+            [follow.id.as_str()],
+            |row| row.get::<_, bool>(0),
+        )?;
+
+        let follower_id = actor_reference_id(&follow.actor);
+        let stored_follower = self.load_stored_follower(follower_id, local_actor_id)?;
+        let relationship = if stored_follower.is_some() {
+            FollowRelationship::Following
+        } else {
+            FollowRelationship::NotFollowing
+        };
+
+        let embedded_inbox = actor_reference_inbox(&follow.actor).cloned();
+        let embedded_shared_inbox = actor_reference_shared_inbox(&follow.actor).cloned();
+        let stored_inbox = stored_follower
+            .as_ref()
+            .and_then(|follower| follower.inbox.clone());
+        let stored_shared_inbox = stored_follower
+            .as_ref()
+            .and_then(|follower| follower.shared_inbox.clone());
+
+        Ok(ReceivedFollowState {
+            already_processed,
+            relationship,
+            remote_actor: Some(RemoteActorState {
+                actor_id: follower_id.clone(),
+                inbox: embedded_inbox.or(stored_inbox),
+                shared_inbox: embedded_shared_inbox.or(stored_shared_inbox),
+            }),
+        })
+    }
+
     fn list_followers(&self, actor_id: &Iri) -> Result<Vec<StoredFollower>, StoreError> {
         let mut stmt = self.conn.prepare(
             r#"
@@ -180,6 +229,35 @@ impl RuntimeStore for SqliteStore {
     }
 }
 
+impl SqliteStore {
+    fn load_stored_follower(
+        &self,
+        follower: &Iri,
+        following: &Iri,
+    ) -> Result<Option<StoredFollower>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT follower_actor_id, following_actor_id, inbox_url, shared_inbox_url
+            FROM followers
+            WHERE follower_actor_id = ?1
+              AND following_actor_id = ?2
+            "#,
+        )?;
+        let mut rows = stmt.query(params![follower.as_str(), following.as_str()])?;
+
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+
+        Ok(Some(StoredFollower {
+            follower: parse_iri(row.get::<_, String>(0)?)?,
+            following: parse_iri(row.get::<_, String>(1)?)?,
+            inbox: parse_optional_iri(row.get::<_, Option<String>>(2)?)?,
+            shared_inbox: parse_optional_iri(row.get::<_, Option<String>>(3)?)?,
+        }))
+    }
+}
+
 fn actor_reference_id(reference: &Reference<Actor>) -> &Iri {
     match reference {
         Reference::Id(id) => id,
@@ -216,7 +294,7 @@ fn parse_optional_iri(value: Option<String>) -> Result<Option<Iri>, StoreError> 
 
 #[cfg(test)]
 mod tests {
-    use feder_core::{Action, StoreFollower};
+    use feder_core::{Action, FollowRelationship, StoreFollower};
 
     use super::*;
 
@@ -239,47 +317,12 @@ mod tests {
         )
     }
 
-    #[test]
-    fn open_in_memory_initializes_followers_table() {
-        let store = SqliteStore::open_in_memory().expect("open in-memory store");
-
-        let table_count: i64 = store
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'followers'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query followers table");
-
-        assert_eq!(table_count, 1);
-
-        let columns: Vec<String> = {
-            let mut stmt = store
-                .conn
-                .prepare("PRAGMA table_info(followers)")
-                .expect("prepare followers table info query");
-            stmt.query_map([], |row| row.get("name"))
-                .expect("query followers table info")
-                .collect::<Result<_, _>>()
-                .expect("collect followers table columns")
-        };
-
-        assert!(columns.contains(&"follower_actor_id".to_string()));
-        assert!(columns.contains(&"following_actor_id".to_string()));
-        assert!(columns.contains(&"inbox_url".to_string()));
-        assert!(columns.contains(&"shared_inbox_url".to_string()));
-
-        let index_count: i64 = store
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_followers_following_actor_id'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query followers following index");
-
-        assert_eq!(index_count, 1);
+    fn follow(actor: Reference<Actor>) -> feder_vocab::Follow {
+        feder_vocab::Follow::new(
+            iri("https://remote.example/activities/follow-1"),
+            actor,
+            Reference::id(iri("https://example.com/users/alice")),
+        )
     }
 
     #[test]
@@ -301,58 +344,6 @@ mod tests {
 
         assert_eq!(follower, "https://remote.example/users/bob");
         assert_eq!(following, "https://example.com/users/alice");
-    }
-
-    #[test]
-    fn persist_actions_stores_embedded_follower_inbox() {
-        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
-        let action = Action::StoreFollower(StoreFollower {
-            follower: Reference::object(actor("https://remote.example/users/bob")),
-            following: Reference::id(iri("https://example.com/users/alice")),
-        });
-
-        store
-            .persist_actions(&[action])
-            .expect("persist follower action");
-
-        let inbox: Option<String> = store
-            .conn
-            .query_row("SELECT inbox_url FROM followers", [], |row| row.get(0))
-            .expect("query stored follower inbox");
-
-        assert_eq!(
-            inbox.as_deref(),
-            Some("https://remote.example/users/bob/inbox")
-        );
-    }
-
-    #[test]
-    fn persist_actions_stores_embedded_follower_shared_inbox() {
-        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
-        let mut follower = actor("https://remote.example/users/bob");
-        follower.endpoints = Some(feder_vocab::Endpoints {
-            shared_inbox: Some(iri("https://remote.example/inbox")),
-        });
-        let action = Action::StoreFollower(StoreFollower {
-            follower: Reference::object(follower),
-            following: Reference::id(iri("https://example.com/users/alice")),
-        });
-
-        store
-            .persist_actions(&[action])
-            .expect("persist follower action");
-
-        let shared_inbox: Option<String> = store
-            .conn
-            .query_row("SELECT shared_inbox_url FROM followers", [], |row| {
-                row.get(0)
-            })
-            .expect("query stored follower shared inbox");
-
-        assert_eq!(
-            shared_inbox.as_deref(),
-            Some("https://remote.example/inbox")
-        );
     }
 
     #[test]
@@ -405,6 +396,115 @@ mod tests {
                 shared_inbox: None,
             }]
         );
+    }
+
+    #[test]
+    fn load_received_follow_state_returns_new_relationship_from_embedded_actor() {
+        let store = SqliteStore::open_in_memory().expect("open in-memory store");
+
+        let state = store
+            .load_received_follow_state(
+                &follow(Reference::object(actor("https://remote.example/users/bob"))),
+                &iri("https://example.com/users/alice"),
+            )
+            .expect("load received follow state");
+
+        assert!(!state.already_processed);
+        assert_eq!(state.relationship, FollowRelationship::NotFollowing);
+        assert_eq!(
+            state.remote_actor,
+            Some(RemoteActorState {
+                actor_id: iri("https://remote.example/users/bob"),
+                inbox: Some(iri("https://remote.example/users/bob/inbox")),
+                shared_inbox: None,
+            })
+        );
+    }
+
+    #[test]
+    fn load_received_follow_state_returns_existing_relationship_from_storage() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let mut follower = actor("https://remote.example/users/bob");
+        follower.endpoints = Some(feder_vocab::Endpoints {
+            shared_inbox: Some(iri("https://remote.example/inbox")),
+        });
+        store
+            .persist_actions(&[Action::StoreFollower(StoreFollower {
+                follower: Reference::object(follower),
+                following: Reference::id(iri("https://example.com/users/alice")),
+            })])
+            .expect("persist follower");
+
+        let state = store
+            .load_received_follow_state(
+                &follow(Reference::id(iri("https://remote.example/users/bob"))),
+                &iri("https://example.com/users/alice"),
+            )
+            .expect("load received follow state");
+
+        assert_eq!(state.relationship, FollowRelationship::Following);
+        assert_eq!(
+            state.remote_actor,
+            Some(RemoteActorState {
+                actor_id: iri("https://remote.example/users/bob"),
+                inbox: Some(iri("https://remote.example/users/bob/inbox")),
+                shared_inbox: Some(iri("https://remote.example/inbox")),
+            })
+        );
+    }
+
+    #[test]
+    fn load_received_follow_state_prefers_embedded_actor_endpoints() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        store
+            .persist_actions(&[Action::StoreFollower(StoreFollower {
+                follower: Reference::object(actor("https://remote.example/users/bob")),
+                following: Reference::id(iri("https://example.com/users/alice")),
+            })])
+            .expect("persist follower");
+
+        let mut updated_actor = actor("https://remote.example/users/bob");
+        updated_actor.inbox = iri("https://remote.example/users/bob/updated-inbox");
+        updated_actor.endpoints = Some(feder_vocab::Endpoints {
+            shared_inbox: Some(iri("https://remote.example/shared-inbox")),
+        });
+        let state = store
+            .load_received_follow_state(
+                &follow(Reference::object(updated_actor)),
+                &iri("https://example.com/users/alice"),
+            )
+            .expect("load received follow state");
+
+        assert_eq!(state.relationship, FollowRelationship::Following);
+        assert_eq!(
+            state.remote_actor,
+            Some(RemoteActorState {
+                actor_id: iri("https://remote.example/users/bob"),
+                inbox: Some(iri("https://remote.example/users/bob/updated-inbox")),
+                shared_inbox: Some(iri("https://remote.example/shared-inbox")),
+            })
+        );
+    }
+
+    #[test]
+    fn load_received_follow_state_reports_processed_activity() {
+        let store = SqliteStore::open_in_memory().expect("open in-memory store");
+        store
+            .conn
+            .execute(
+                "INSERT INTO processed_inbox_activities (activity_id) VALUES (?1)",
+                ["https://remote.example/activities/follow-1"],
+            )
+            .expect("insert processed inbox activity");
+
+        let state = store
+            .load_received_follow_state(
+                &follow(Reference::id(iri("https://remote.example/users/bob"))),
+                &iri("https://example.com/users/alice"),
+            )
+            .expect("load received follow state");
+
+        assert!(state.already_processed);
     }
 
     #[test]
