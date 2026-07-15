@@ -24,9 +24,9 @@ Approach
 --------
 
 Feder separates ActivityPub protocol logic from platform execution. The core
-should contain federation behavior such as inbox/outbox state, delivery
-decisions, and protocol-level rules. Runtimes provide platform-specific pieces
-such as networking, storage, clocks, scheduling, and execution.
+should contain deterministic protocol decisions. Runtimes provide
+platform-specific pieces such as networking, storage, clocks, scheduling, and
+execution.
 
 The first target is a Linux proof of concept for a small single-user
 ActivityPub server. Future runtimes may explore more constrained environments.

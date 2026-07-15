@@ -20,7 +20,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use feder_core::{CoreError, DecisionContext, FollowPolicyDecision};
+use feder_core::{CoreError, DecisionContext, FederCore, FollowPolicyDecision};
 use feder_vocab::Follow;
 use serde_json::{Value, from_slice, from_value};
 
@@ -118,10 +118,7 @@ pub async fn inbox(
         .load_received_follow_state(&follow, &app_state.local_actor.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let decision = app_state
-        .core
-        .lock()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    let decision = FederCore::new()
         .decide_received_follow(follow, state, FollowPolicyDecision::Accept, context)
         .map_err(status_for_core_error)?;
 
@@ -389,7 +386,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ignores_unsupported_activity_without_mutating_core() {
+    async fn ignores_unsupported_activity_without_applying_decision() {
         let app_state = AppState::from_config(test_config()).expect("build app state");
         let body = Bytes::from(
             serde_json::to_vec(&json!({
