@@ -20,7 +20,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use feder_core::Input;
+use feder_core::{CoreError, DecisionContext, FollowPolicyDecision};
 use feder_vocab::Follow;
 use serde_json::{Value, from_slice, from_value};
 
@@ -54,6 +54,13 @@ fn verify_inbox_request(app_state: &AppState, _req: &InboxRequest) -> Result<(),
     match app_state.inbox_auth_policy {
         InboxAuthPolicy::AllowUnsignedInsecureDev => Ok(()),
         InboxAuthPolicy::RequireSigned => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
+fn status_for_core_error(error: CoreError) -> StatusCode {
+    match error {
+        CoreError::MissingRemoteActor | CoreError::MissingInbox => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -99,21 +106,30 @@ pub async fn inbox(
     }
     let follow: Follow = from_value(value).map_err(|_| StatusCode::BAD_REQUEST)?;
     let accept_id = accept_id_for_follow(&app_state.local_actor.id, &follow.id)?;
-    let input = Input::received_follow(follow, accept_id);
-
-    let result = {
-        let mut core = app_state
-            .core
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        core.handle(input)
+    let context = DecisionContext {
+        local_actor: app_state.local_actor.id.clone(),
+        accept_id,
     };
+
+    let state = app_state
+        .store
+        .lock()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .load_received_follow_state(&follow, &app_state.local_actor.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let decision = app_state
+        .core
+        .lock()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .decide_received_follow(follow, state, FollowPolicyDecision::Accept, context)
+        .map_err(status_for_core_error)?;
 
     app_state
         .store
         .lock()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .persist_actions(&result.actions)
+        .apply_decision(&decision)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::ACCEPTED.into_response())
@@ -182,7 +198,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn valid_follow_reaches_core() {
+    async fn valid_follow_is_applied_through_storage_decision() {
         let app_state = AppState::from_config(test_config()).expect("build app state");
 
         let response = post_inbox(
@@ -197,19 +213,30 @@ mod tests {
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
         let core = app_state.core.lock().expect("core lock");
-        assert_eq!(core.state().followers().len(), 1);
+        assert!(core.state().followers().is_empty());
+        assert!(core.state().delivery_targets().is_empty());
+        drop(core);
+
+        let store = app_state.store.lock().expect("store lock");
+        let followers = store
+            .list_followers(
+                &"http://127.0.0.1:3000/users/alice"
+                    .parse()
+                    .expect("valid IRI"),
+            )
+            .expect("list followers");
+        assert_eq!(followers.len(), 1);
         assert_eq!(
-            core.state().followers()[0].follower.as_str(),
+            followers[0].follower.as_str(),
             "https://remote.example/users/bob"
         );
         assert_eq!(
-            core.state().followers()[0].following.as_str(),
+            followers[0].following.as_str(),
             "http://127.0.0.1:3000/users/alice"
         );
-        assert_eq!(core.state().delivery_targets().len(), 1);
         assert_eq!(
-            core.state().delivery_targets()[0].inbox.as_str(),
-            "https://remote.example/users/bob/inbox"
+            followers[0].inbox.as_ref().map(|iri| iri.as_str()),
+            Some("https://remote.example/users/bob/inbox")
         );
     }
 
