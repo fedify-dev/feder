@@ -94,7 +94,10 @@ impl RuntimeStore for SqliteStore {
         let tx = self.conn.transaction()?;
 
         for change in &decision.state_changes {
-            apply_state_change(&tx, change)?;
+            if !apply_state_change(&tx, change)? {
+                tx.commit()?;
+                return Ok(());
+            }
         }
 
         for effect in &decision.effects {
@@ -240,13 +243,15 @@ impl SqliteStore {
     }
 }
 
-fn apply_state_change(tx: &Transaction<'_>, change: &StateChange) -> Result<(), StoreError> {
+fn apply_state_change(tx: &Transaction<'_>, change: &StateChange) -> Result<bool, StoreError> {
     match change {
         StateChange::RecordProcessedActivity { activity_id } => {
-            tx.execute(
-                "INSERT INTO processed_inbox_activities (activity_id) VALUES (?1)",
+            let inserted = tx.execute(
+                "INSERT OR IGNORE INTO processed_inbox_activities (activity_id) VALUES (?1)",
                 [activity_id.as_str()],
             )?;
+
+            return Ok(inserted > 0);
         }
         StateChange::AddFollower {
             local_actor,
@@ -307,7 +312,7 @@ fn apply_state_change(tx: &Transaction<'_>, change: &StateChange) -> Result<(), 
         _ => return Err(StoreError::UnsupportedDecisionValue("state change")),
     }
 
-    Ok(())
+    Ok(true)
 }
 
 fn apply_effect(tx: &Transaction<'_>, effect: &Effect) -> Result<(), StoreError> {
@@ -600,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_decision_rolls_back_when_one_state_change_fails() {
+    fn apply_decision_skips_duplicate_processed_activity() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
         store
             .conn
@@ -612,29 +617,52 @@ mod tests {
 
         let decision = Decision {
             state_changes: vec![
+                StateChange::RecordProcessedActivity {
+                    activity_id: iri("https://remote.example/activities/follow-1"),
+                },
                 StateChange::AddFollower {
                     local_actor: iri("https://example.com/users/alice"),
                     remote_actor: iri("https://remote.example/users/bob"),
                     inbox: Some(iri("https://remote.example/users/bob/inbox")),
                     shared_inbox: None,
                 },
-                StateChange::RecordProcessedActivity {
-                    activity_id: iri("https://remote.example/activities/follow-1"),
+                StateChange::StoreActivity {
+                    activity: accept_activity(),
                 },
             ],
-            effects: Vec::new(),
+            effects: vec![Effect::PlanDelivery(PlannedDelivery {
+                activity: accept_activity(),
+                inbox: iri("https://remote.example/users/bob/inbox"),
+            })],
         };
 
-        let err = store
+        store
             .apply_decision(&decision)
-            .expect_err("duplicate processed activity should fail");
+            .expect("duplicate processed activity should be ignored");
 
-        assert!(matches!(err, StoreError::Sqlite(_)));
         assert!(
             store
                 .list_followers(&iri("https://example.com/users/alice"))
                 .expect("list followers")
                 .is_empty()
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT COUNT(*) FROM activities", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .expect("count stored activities"),
+            0
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT COUNT(*) FROM outgoing_deliveries", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .expect("count queued deliveries"),
+            0
         );
     }
 
