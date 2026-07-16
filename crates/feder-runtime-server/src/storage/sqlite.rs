@@ -94,10 +94,20 @@ impl RuntimeStore for SqliteStore {
         let tx = self.conn.transaction()?;
 
         for change in &decision.state_changes {
-            if !apply_state_change(&tx, change)? {
-                tx.commit()?;
+            if let StateChange::RecordProcessedActivity { activity_id } = change
+                && !record_processed_activity(&tx, activity_id)?
+            {
+                tx.rollback()?;
                 return Ok(());
             }
+        }
+
+        for change in &decision.state_changes {
+            if matches!(change, StateChange::RecordProcessedActivity { .. }) {
+                continue;
+            }
+
+            apply_state_change(&tx, change)?;
         }
 
         for effect in &decision.effects {
@@ -252,16 +262,18 @@ impl SqliteStore {
     }
 }
 
-fn apply_state_change(tx: &Transaction<'_>, change: &StateChange) -> Result<bool, StoreError> {
-    match change {
-        StateChange::RecordProcessedActivity { activity_id } => {
-            let inserted = tx.execute(
-                "INSERT OR IGNORE INTO processed_inbox_activities (activity_id) VALUES (?1)",
-                [activity_id.as_str()],
-            )?;
+fn record_processed_activity(tx: &Transaction<'_>, activity_id: &Iri) -> Result<bool, StoreError> {
+    let inserted = tx.execute(
+        "INSERT OR IGNORE INTO processed_inbox_activities (activity_id) VALUES (?1)",
+        [activity_id.as_str()],
+    )?;
 
-            return Ok(inserted > 0);
-        }
+    Ok(inserted > 0)
+}
+
+fn apply_state_change(tx: &Transaction<'_>, change: &StateChange) -> Result<(), StoreError> {
+    match change {
+        StateChange::RecordProcessedActivity { .. } => {}
         StateChange::AddFollower {
             local_actor,
             remote_actor,
@@ -318,7 +330,7 @@ fn apply_state_change(tx: &Transaction<'_>, change: &StateChange) -> Result<bool
         _ => return Err(StoreError::UnsupportedDecisionValue("state change")),
     }
 
-    Ok(true)
+    Ok(())
 }
 
 fn apply_effect(tx: &Transaction<'_>, effect: &Effect) -> Result<(), StoreError> {
@@ -629,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_decision_skips_duplicate_processed_activity() {
+    fn apply_decision_rolls_back_changes_before_duplicate_processed_activity() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
         store
             .conn
@@ -641,9 +653,6 @@ mod tests {
 
         let decision = Decision {
             state_changes: vec![
-                StateChange::RecordProcessedActivity {
-                    activity_id: iri("https://remote.example/activities/follow-1"),
-                },
                 StateChange::AddFollower {
                     local_actor: iri("https://example.com/users/alice"),
                     remote_actor: iri("https://remote.example/users/bob"),
@@ -652,6 +661,9 @@ mod tests {
                 },
                 StateChange::StoreActivity {
                     activity: accept_activity(),
+                },
+                StateChange::RecordProcessedActivity {
+                    activity_id: iri("https://remote.example/activities/follow-1"),
                 },
             ],
             effects: vec![Effect::PlanDelivery(PlannedDelivery {
