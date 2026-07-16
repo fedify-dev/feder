@@ -22,12 +22,10 @@ use crate::webfinger::webfinger;
 use crate::{actor::actor, inbox::inbox};
 use axum::routing::post;
 use axum::{Router, extract::DefaultBodyLimit, http::StatusCode, routing::get};
-use feder_core::{FederConfig, FederCore};
 use feder_vocab::Actor;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub core: Arc<Mutex<FederCore>>,
     pub store: Arc<Mutex<SqliteStore>>,
     pub local_actor: Actor,
     pub username: String,
@@ -41,14 +39,12 @@ impl AppState {
         actor.preferred_username = Some(config.username.clone());
         actor.name = Some(config.username.clone());
 
-        let core = FederCore::new(FederConfig::new(actor.clone()));
         let store = match &config.storage {
             StorageConfig::InMemory => SqliteStore::open_in_memory()?,
             StorageConfig::Sqlite { path } => SqliteStore::open(path)?,
         };
 
         Ok(Self {
-            core: Arc::new(Mutex::new(core)),
             store: Arc::new(Mutex::new(store)),
             local_actor: actor,
             username: config.username,

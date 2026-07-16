@@ -20,7 +20,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use feder_core::Input;
+use feder_core::{CoreError, DecisionContext, FederCore, FollowPolicyDecision};
 use feder_vocab::Follow;
 use serde_json::{Value, from_slice, from_value};
 
@@ -54,6 +54,13 @@ fn verify_inbox_request(app_state: &AppState, _req: &InboxRequest) -> Result<(),
     match app_state.inbox_auth_policy {
         InboxAuthPolicy::AllowUnsignedInsecureDev => Ok(()),
         InboxAuthPolicy::RequireSigned => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
+fn status_for_core_error(error: CoreError) -> StatusCode {
+    match error {
+        CoreError::MissingRemoteActor | CoreError::MissingInbox => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -99,21 +106,26 @@ pub async fn inbox(
     }
     let follow: Follow = from_value(value).map_err(|_| StatusCode::BAD_REQUEST)?;
     let accept_id = accept_id_for_follow(&app_state.local_actor.id, &follow.id)?;
-    let input = Input::received_follow(follow, accept_id);
-
-    let result = {
-        let mut core = app_state
-            .core
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        core.handle(input)
+    let context = DecisionContext {
+        local_actor: app_state.local_actor.id.clone(),
+        accept_id,
     };
 
-    app_state
+    let mut store = app_state
         .store
         .lock()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .persist_actions(&result.actions)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let state = store
+        .load_received_follow_state(&follow, &app_state.local_actor.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let decision = FederCore::new()
+        .decide_received_follow(follow, state, FollowPolicyDecision::Accept, context)
+        .map_err(status_for_core_error)?;
+
+    store
+        .apply_decision(&decision)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::ACCEPTED.into_response())
@@ -127,6 +139,7 @@ mod tests {
         http::{HeaderMap, Method, Request, StatusCode, Uri, header::CONTENT_TYPE},
         response::Response,
     };
+    use feder_vocab::{Follow, Iri};
     use serde_json::json;
     use tower::ServiceExt;
 
@@ -164,6 +177,29 @@ mod tests {
         )
     }
 
+    fn follow_body_with_actor_id_only() -> Bytes {
+        Bytes::from(
+            serde_json::to_vec(&json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "type": "Follow",
+                "id": "https://remote.example/activities/follow-1",
+                "actor": "https://remote.example/users/bob",
+                "object": "http://127.0.0.1:3000/users/alice"
+            }))
+            .expect("serialize follow"),
+        )
+    }
+
+    fn local_actor_id() -> Iri {
+        "http://127.0.0.1:3000/users/alice"
+            .parse()
+            .expect("valid IRI")
+    }
+
+    fn follow_from_body(body: &Bytes) -> Follow {
+        serde_json::from_slice(body).expect("deserialize follow body")
+    }
+
     async fn post_inbox(
         app_state: AppState,
         username: &str,
@@ -181,36 +217,138 @@ mod tests {
         .await
     }
 
+    fn assert_no_stored_followers(app_state: &AppState) {
+        let followers = app_state
+            .store
+            .lock()
+            .expect("store lock")
+            .list_followers(&local_actor_id())
+            .expect("list followers");
+
+        assert!(followers.is_empty());
+    }
+
     #[tokio::test]
-    async fn valid_follow_reaches_core() {
+    async fn valid_follow_is_applied_through_storage_decision() {
         let app_state = AppState::from_config(test_config()).expect("build app state");
+        let body = follow_body();
 
         let response = post_inbox(
             app_state.clone(),
             "alice",
             activity_json_headers(),
-            follow_body(),
+            body.clone(),
         )
         .await
         .expect("accepted follow");
 
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-        let core = app_state.core.lock().expect("core lock");
-        assert_eq!(core.state().followers().len(), 1);
+        let store = app_state.store.lock().expect("store lock");
+        let followers = store
+            .list_followers(&local_actor_id())
+            .expect("list followers");
+        assert_eq!(followers.len(), 1);
         assert_eq!(
-            core.state().followers()[0].follower.as_str(),
+            followers[0].follower.as_str(),
             "https://remote.example/users/bob"
         );
         assert_eq!(
-            core.state().followers()[0].following.as_str(),
+            followers[0].following.as_str(),
             "http://127.0.0.1:3000/users/alice"
         );
-        assert_eq!(core.state().delivery_targets().len(), 1);
         assert_eq!(
-            core.state().delivery_targets()[0].inbox.as_str(),
-            "https://remote.example/users/bob/inbox"
+            followers[0].inbox.as_ref().map(|iri| iri.as_str()),
+            Some("https://remote.example/users/bob/inbox")
         );
+
+        let follow = follow_from_body(&body);
+        let state = store
+            .load_received_follow_state(&follow, &local_actor_id())
+            .expect("load received follow state");
+
+        assert!(state.already_processed);
+    }
+
+    #[tokio::test]
+    async fn duplicate_follow_is_idempotent() {
+        let app_state = AppState::from_config(test_config()).expect("build app state");
+        let body = follow_body();
+
+        let first_response = post_inbox(
+            app_state.clone(),
+            "alice",
+            activity_json_headers(),
+            body.clone(),
+        )
+        .await
+        .expect("accepted first follow");
+        let second_response = post_inbox(app_state.clone(), "alice", activity_json_headers(), body)
+            .await
+            .expect("accepted duplicate follow");
+
+        assert_eq!(first_response.status(), StatusCode::ACCEPTED);
+        assert_eq!(second_response.status(), StatusCode::ACCEPTED);
+
+        let followers = app_state
+            .store
+            .lock()
+            .expect("store lock")
+            .list_followers(&local_actor_id())
+            .expect("list followers");
+
+        assert_eq!(followers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_duplicate_follow_is_idempotent() {
+        let app_state = AppState::from_config(test_config()).expect("build app state");
+        let body = follow_body();
+
+        let (first_response, second_response) = tokio::join!(
+            post_inbox(
+                app_state.clone(),
+                "alice",
+                activity_json_headers(),
+                body.clone(),
+            ),
+            post_inbox(app_state.clone(), "alice", activity_json_headers(), body),
+        );
+
+        assert_eq!(
+            first_response.expect("accepted first follow").status(),
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(
+            second_response.expect("accepted duplicate follow").status(),
+            StatusCode::ACCEPTED
+        );
+
+        let followers = app_state
+            .store
+            .lock()
+            .expect("store lock")
+            .list_followers(&local_actor_id())
+            .expect("list followers");
+
+        assert_eq!(followers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn rejects_follow_without_known_inbox() {
+        let app_state = AppState::from_config(test_config()).expect("build app state");
+
+        let error = post_inbox(
+            app_state.clone(),
+            "alice",
+            activity_json_headers(),
+            follow_body_with_actor_id_only(),
+        )
+        .await
+        .expect_err("follow without known inbox should be rejected");
+
+        assert_eq!(error, StatusCode::BAD_REQUEST);
+        assert_no_stored_followers(&app_state);
     }
 
     #[tokio::test]
@@ -229,15 +367,7 @@ mod tests {
         .expect_err("unsigned follow should be rejected");
 
         assert_eq!(error, StatusCode::UNAUTHORIZED);
-        assert!(
-            app_state
-                .core
-                .lock()
-                .expect("core lock")
-                .state()
-                .followers()
-                .is_empty()
-        );
+        assert_no_stored_followers(&app_state);
     }
 
     #[tokio::test]
@@ -254,15 +384,7 @@ mod tests {
         .expect_err("unknown inbox actor should be rejected");
 
         assert_eq!(error, StatusCode::NOT_FOUND);
-        assert!(
-            app_state
-                .core
-                .lock()
-                .expect("core lock")
-                .state()
-                .followers()
-                .is_empty()
-        );
+        assert_no_stored_followers(&app_state);
     }
 
     #[tokio::test]
@@ -276,15 +398,7 @@ mod tests {
             .expect_err("unsupported content type should be rejected");
 
         assert_eq!(error, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-        assert!(
-            app_state
-                .core
-                .lock()
-                .expect("core lock")
-                .state()
-                .followers()
-                .is_empty()
-        );
+        assert_no_stored_followers(&app_state);
     }
 
     #[tokio::test]
@@ -301,19 +415,11 @@ mod tests {
         .expect_err("malformed json should be rejected");
 
         assert_eq!(error, StatusCode::BAD_REQUEST);
-        assert!(
-            app_state
-                .core
-                .lock()
-                .expect("core lock")
-                .state()
-                .followers()
-                .is_empty()
-        );
+        assert_no_stored_followers(&app_state);
     }
 
     #[tokio::test]
-    async fn ignores_unsupported_activity_without_mutating_core() {
+    async fn ignores_unsupported_activity_without_applying_decision() {
         let app_state = AppState::from_config(test_config()).expect("build app state");
         let body = Bytes::from(
             serde_json::to_vec(&json!({
@@ -334,15 +440,7 @@ mod tests {
             .expect("unsupported activity is accepted but ignored");
 
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        assert!(
-            app_state
-                .core
-                .lock()
-                .expect("core lock")
-                .state()
-                .followers()
-                .is_empty()
-        );
+        assert_no_stored_followers(&app_state);
     }
 
     #[tokio::test]
