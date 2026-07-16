@@ -134,23 +134,32 @@ impl RuntimeStore for SqliteStore {
             FollowRelationship::NotFollowing
         };
 
-        let embedded_inbox = actor_reference_inbox(&follow.actor).cloned();
-        let embedded_shared_inbox = actor_reference_shared_inbox(&follow.actor).cloned();
         let stored_inbox = stored_follower
             .as_ref()
             .and_then(|follower| follower.inbox.clone());
         let stored_shared_inbox = stored_follower
             .as_ref()
             .and_then(|follower| follower.shared_inbox.clone());
+        let remote_actor = match &follow.actor {
+            Reference::Object(actor) => RemoteActorState {
+                actor_id: actor.id.clone(),
+                inbox: Some(actor.inbox.clone()),
+                shared_inbox: actor
+                    .endpoints
+                    .as_ref()
+                    .and_then(|endpoints| endpoints.shared_inbox.clone()),
+            },
+            Reference::Id(actor_id) => RemoteActorState {
+                actor_id: actor_id.clone(),
+                inbox: stored_inbox,
+                shared_inbox: stored_shared_inbox,
+            },
+        };
 
         Ok(ReceivedFollowState {
             already_processed,
             relationship,
-            remote_actor: Some(RemoteActorState {
-                actor_id: follower_id.clone(),
-                inbox: embedded_inbox.or(stored_inbox),
-                shared_inbox: embedded_shared_inbox.or(stored_shared_inbox),
-            }),
+            remote_actor: Some(remote_actor),
         })
     }
 
@@ -375,23 +384,6 @@ fn actor_reference_id(reference: &Reference<Actor>) -> &Iri {
     match reference {
         Reference::Id(id) => id,
         Reference::Object(actor) => &actor.id,
-    }
-}
-
-fn actor_reference_inbox(reference: &Reference<Actor>) -> Option<&Iri> {
-    match reference {
-        Reference::Id(_) => None,
-        Reference::Object(actor) => Some(&actor.inbox),
-    }
-}
-
-fn actor_reference_shared_inbox(reference: &Reference<Actor>) -> Option<&Iri> {
-    match reference {
-        Reference::Id(_) => None,
-        Reference::Object(actor) => actor
-            .endpoints
-            .as_ref()
-            .and_then(|endpoints| endpoints.shared_inbox.as_ref()),
     }
 }
 
@@ -750,6 +742,40 @@ mod tests {
                 actor_id: iri("https://remote.example/users/bob"),
                 inbox: Some(iri("https://remote.example/users/bob/updated-inbox")),
                 shared_inbox: Some(iri("https://remote.example/shared-inbox")),
+            })
+        );
+    }
+
+    #[test]
+    fn load_received_follow_state_does_not_reuse_stale_shared_inbox() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        store
+            .apply_decision(&add_follower_decision(
+                "https://remote.example/users/bob",
+                "https://example.com/users/alice",
+                Some("https://remote.example/users/bob/old-inbox"),
+                Some("https://remote.example/old-shared-inbox"),
+            ))
+            .expect("apply follower decision");
+
+        let mut updated_actor = actor("https://remote.example/users/bob");
+        updated_actor.inbox = iri("https://remote.example/users/bob/current-inbox");
+        updated_actor.endpoints = None;
+
+        let state = store
+            .load_received_follow_state(
+                &follow(Reference::object(updated_actor)),
+                &iri("https://example.com/users/alice"),
+            )
+            .expect("load received follow state");
+
+        assert_eq!(state.relationship, FollowRelationship::Following);
+        assert_eq!(
+            state.remote_actor,
+            Some(RemoteActorState {
+                actor_id: iri("https://remote.example/users/bob"),
+                inbox: Some(iri("https://remote.example/users/bob/current-inbox")),
+                shared_inbox: None,
             })
         );
     }
