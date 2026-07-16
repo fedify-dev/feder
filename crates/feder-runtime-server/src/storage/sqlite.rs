@@ -278,11 +278,8 @@ fn apply_state_change(tx: &Transaction<'_>, change: &StateChange) -> Result<bool
                 )
                 VALUES (?1, ?2, ?3, ?4)
                 ON CONFLICT(follower_actor_id, following_actor_id) DO UPDATE SET
-                    inbox_url = COALESCE(excluded.inbox_url, followers.inbox_url),
-                    shared_inbox_url = COALESCE(
-                        excluded.shared_inbox_url,
-                        followers.shared_inbox_url
-                    )
+                    inbox_url = excluded.inbox_url,
+                    shared_inbox_url = excluded.shared_inbox_url
                 "#,
                 params![
                     remote_actor.as_str(),
@@ -527,6 +524,41 @@ mod tests {
             vec![StoredRecipient {
                 actor_id: iri("https://remote.example/users/bob"),
                 inbox: iri("https://remote.example/users/bob/updated-inbox"),
+                shared_inbox: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn apply_decision_clears_stale_shared_inbox() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+
+        store
+            .apply_decision(&add_follower_decision(
+                "https://remote.example/users/bob",
+                "https://example.com/users/alice",
+                Some("https://remote.example/users/bob/old-inbox"),
+                Some("https://remote.example/old-shared-inbox"),
+            ))
+            .expect("apply original follower decision");
+        store
+            .apply_decision(&add_follower_decision(
+                "https://remote.example/users/bob",
+                "https://example.com/users/alice",
+                Some("https://remote.example/users/bob/current-inbox"),
+                None,
+            ))
+            .expect("apply refreshed follower decision");
+
+        let recipients = store
+            .list_follower_recipients(&iri("https://example.com/users/alice"))
+            .expect("list follower recipients");
+
+        assert_eq!(
+            recipients,
+            vec![StoredRecipient {
+                actor_id: iri("https://remote.example/users/bob"),
+                inbox: iri("https://remote.example/users/bob/current-inbox"),
                 shared_inbox: None,
             }]
         );
