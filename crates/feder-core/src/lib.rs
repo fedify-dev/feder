@@ -22,6 +22,9 @@ use alloc::{string::String, vec::Vec};
 
 pub use feder_vocab as vocab;
 
+#[cfg(feature = "http-signatures")]
+pub mod http_signatures;
+
 /// Portable core state and decision logic.
 #[derive(Debug)]
 pub struct FederCore {

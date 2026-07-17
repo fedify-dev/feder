@@ -8,8 +8,16 @@ license.workspace = true
 homepage.workspace = true
 repository.workspace = true
 
+[features]
+http-signatures = ["dep:rsa", "dep:zeroize"]
+
 [dependencies]
 feder-vocab.workspace = true
+rsa = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
+
+[dev-dependencies]
+rand_chacha.workspace = true
 
 [lints]
 workspace = true

@@ -17,8 +17,8 @@ linux-arm64 = "hongdown-*-aarch64-unknown-linux-musl.tar.bz2"
 [tasks.check]
 description = "Run type check, lint, and check Markdown format"
 run = [
-  "cargo check",
-  "cargo clippy",
+  "cargo check --workspace --all-targets --all-features",
+  "cargo clippy --workspace --all-targets --all-features",
   "cargo fmt --check",
   "hongdown --check",
   "mise fmt --check",
@@ -30,7 +30,7 @@ run = ["cargo fmt", "hongdown --write", "mise fmt"]
 
 [tasks.test]
 description = "Run the Rust tests"
-run = "cargo test --workspace"
+run = "cargo test --workspace --all-features"
 
 [tasks.bump]
 description = "Preview a workspace version bump"

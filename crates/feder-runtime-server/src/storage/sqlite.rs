@@ -361,7 +361,7 @@ mod tests {
         let action = store_follower_action();
 
         store
-            .persist_actions(&[action.clone()])
+            .persist_actions(core::slice::from_ref(&action))
             .expect("persist follower action first time");
         store
             .persist_actions(&[action])
