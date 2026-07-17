@@ -29,6 +29,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeSeq}
 /// The canonical Activity Streams JSON-LD context URL.
 pub const ACTIVITYSTREAMS_CONTEXT: &str = "https://www.w3.org/ns/activitystreams";
 
+/// The JSON-LD context for the security vocabulary used by actor public keys.
+pub const SECURITY_CONTEXT: &str = "https://w3id.org/security/v1";
+
 /// An absolute ActivityPub/ActivityStreams identifier.
 pub type Iri = IriString;
 
@@ -172,6 +175,37 @@ activitystreams_type!(FollowType, Follow);
 activitystreams_type!(AcceptType, Accept);
 activitystreams_type!(CreateType, Create);
 
+/// A JSON-LD context represented by one or more IRIs.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum Context {
+    Iri(Iri),
+    Iris(Vec<Iri>),
+}
+
+impl Context {
+    #[must_use]
+    pub fn one(context: Iri) -> Self {
+        Self::Iri(context)
+    }
+
+    #[must_use]
+    pub fn many(contexts: impl Into<Vec<Iri>>) -> Self {
+        Self::Iris(contexts.into())
+    }
+
+    fn include(&mut self, context: Iri) {
+        match self {
+            Self::Iri(existing) if existing == &context => {}
+            Self::Iri(existing) => {
+                *self = Self::Iris(Vec::from([existing.clone(), context]));
+            }
+            Self::Iris(existing) if !existing.contains(&context) => existing.push(context),
+            Self::Iris(_) => {}
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ActorType {
     Application,
@@ -189,11 +223,40 @@ pub struct Endpoints {
     pub shared_inbox: Option<Iri>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum CryptographicKeyType {
+    #[default]
+    CryptographicKey,
+}
+
+/// A public key published by an ActivityPub actor.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CryptographicKey {
+    pub id: Iri,
+    #[serde(rename = "type")]
+    pub kind: CryptographicKeyType,
+    pub owner: Iri,
+    #[serde(rename = "publicKeyPem")]
+    pub public_key_pem: String,
+}
+
+impl CryptographicKey {
+    #[must_use]
+    pub fn new(id: Iri, owner: Iri, public_key_pem: String) -> Self {
+        Self {
+            id,
+            kind: CryptographicKeyType::default(),
+            owner,
+            public_key_pem,
+        }
+    }
+}
+
 /// A minimal ActivityPub actor.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Actor {
     #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
-    pub context: Option<Iri>,
+    pub context: Option<Context>,
     #[serde(rename = "type")]
     pub kind: ActorType,
     pub id: Iri,
@@ -205,6 +268,8 @@ pub struct Actor {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoints: Option<Endpoints>,
+    #[serde(rename = "publicKey", skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<Reference<CryptographicKey>>,
 }
 
 impl Actor {
@@ -216,11 +281,11 @@ impl Actor {
     #[must_use]
     pub fn new(kind: ActorType, id: Iri, inbox: Iri, outbox: Iri) -> Self {
         Self {
-            context: Some(
+            context: Some(Context::one(
                 ACTIVITYSTREAMS_CONTEXT
                     .parse()
                     .expect("valid ActivityStreams IRI"),
-            ),
+            )),
             kind,
             id,
             inbox,
@@ -228,7 +293,24 @@ impl Actor {
             preferred_username: None,
             name: None,
             endpoints: None,
+            public_key: None,
         }
+    }
+
+    pub fn set_public_key(&mut self, public_key: Reference<CryptographicKey>) {
+        let security_context = SECURITY_CONTEXT
+            .parse()
+            .expect("valid security context IRI");
+        self.context
+            .get_or_insert_with(|| {
+                Context::one(
+                    ACTIVITYSTREAMS_CONTEXT
+                        .parse()
+                        .expect("valid ActivityStreams IRI"),
+                )
+            })
+            .include(security_context);
+        self.public_key = Some(public_key);
     }
 }
 
