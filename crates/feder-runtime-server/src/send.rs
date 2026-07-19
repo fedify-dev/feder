@@ -15,7 +15,7 @@
 
 use std::{sync::Arc, time::SystemTime};
 
-use crate::{config::OutboundAddressPolicy, outbound_network};
+use crate::{config::OutboundAddressPolicy, url};
 use feder_core::{
     Action, Activity, SendActivity,
     http_signatures::{
@@ -43,8 +43,7 @@ impl ActivitySender {
         key_id: String,
         address_policy: OutboundAddressPolicy,
     ) -> Result<Self, SendError> {
-        let client =
-            outbound_network::build_client(address_policy).map_err(SendError::BuildClient)?;
+        let client = url::build_client(address_policy).map_err(SendError::BuildClient)?;
 
         Ok(Self {
             client,
@@ -82,7 +81,7 @@ impl ActivitySender {
         if !matches!(url.scheme(), "http" | "https") {
             return Err(SendError::InvalidInbox(send.inbox.to_string()));
         }
-        outbound_network::validate_literal_host(&url, self.address_policy).map_err(|address| {
+        crate::url::validate_literal_host(&url, self.address_policy).map_err(|address| {
             SendError::PrivateInboxAddress {
                 inbox: send.inbox.to_string(),
                 address,

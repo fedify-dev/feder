@@ -18,9 +18,9 @@ pub mod app;
 pub mod config;
 pub mod error;
 pub mod inbox;
-mod outbound_network;
 pub mod send;
 pub mod storage;
+mod url;
 pub mod webfinger;
 
 pub use app::{AppState, build_router};

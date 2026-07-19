@@ -26,6 +26,7 @@ use reqwest::{
     dns::{Addrs, Name, Resolve, Resolving},
     redirect::Policy,
 };
+use url::Host;
 
 use crate::config::OutboundAddressPolicy;
 
@@ -90,9 +91,9 @@ pub(crate) fn validate_literal_host(
     }
 
     match url.host() {
-        Some(url::Host::Ipv4(address)) => validate_public_address(address.into()),
-        Some(url::Host::Ipv6(address)) => validate_public_address(address.into()),
-        Some(url::Host::Domain(_)) | None => Ok(()),
+        Some(Host::Ipv4(address)) => validate_public_address(address.into()),
+        Some(Host::Ipv6(address)) => validate_public_address(address.into()),
+        Some(Host::Domain(_)) | None => Ok(()),
     }
 }
 
