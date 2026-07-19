@@ -77,18 +77,55 @@ impl ActorResolver {
     }
 
     pub async fn resolve(&self, actor_id: &Iri) -> Result<Actor, ActorResolveError> {
-        let url = Url::parse(actor_id.as_str())
-            .map_err(|_| ActorResolveError::InvalidActorId(actor_id.to_string()))?;
+        let body = self.fetch_document(actor_id).await?;
+        let document: ActorDocument =
+            serde_json::from_slice(&body).map_err(ActorResolveError::Deserialize)?;
+        let actor = document.into_actor();
+        if actor.id != *actor_id {
+            return Err(ActorResolveError::ActorIdMismatch {
+                requested: actor_id.to_string(),
+                returned: actor.id.to_string(),
+            });
+        }
+
+        Ok(actor)
+    }
+
+    pub(crate) async fn resolve_key(
+        &self,
+        key_id: &Iri,
+    ) -> Result<CryptographicKey, ActorResolveError> {
+        let body = self.fetch_document(key_id).await?;
+        if let Ok(key) = serde_json::from_slice::<CryptographicKey>(&body)
+            && key.id == *key_id
+        {
+            return Ok(key);
+        }
+        if let Ok(document) = serde_json::from_slice::<ActorDocument>(&body)
+            && let Some(Reference::Object(key)) = document.public_key
+            && key.id == *key_id
+        {
+            return Ok(*key);
+        }
+
+        Err(ActorResolveError::KeyNotFound(key_id.to_string()))
+    }
+
+    async fn fetch_document(&self, resource_id: &Iri) -> Result<Vec<u8>, ActorResolveError> {
+        let url = Url::parse(resource_id.as_str())
+            .map_err(|_| ActorResolveError::InvalidResourceId(resource_id.to_string()))?;
         if !matches!(url.scheme(), "http" | "https")
             || !url.username().is_empty()
             || url.password().is_some()
             || url.host().is_none()
         {
-            return Err(ActorResolveError::InvalidActorId(actor_id.to_string()));
+            return Err(ActorResolveError::InvalidResourceId(
+                resource_id.to_string(),
+            ));
         }
         url::validate_literal_host(&url, self.address_policy).map_err(|address| {
-            ActorResolveError::PrivateActorAddress {
-                actor: actor_id.to_string(),
+            ActorResolveError::PrivateResourceAddress {
+                resource: resource_id.to_string(),
                 address,
             }
         })?;
@@ -102,7 +139,7 @@ impl ActorResolver {
             .map_err(ActorResolveError::Request)?;
         if !response.status().is_success() {
             return Err(ActorResolveError::UnsuccessfulStatus {
-                actor: actor_id.to_string(),
+                resource: resource_id.to_string(),
                 status: response.status(),
             });
         }
@@ -130,17 +167,8 @@ impl ActorResolver {
             }
             body.extend_from_slice(&chunk);
         }
-        let document: ActorDocument =
-            serde_json::from_slice(&body).map_err(ActorResolveError::Deserialize)?;
-        let actor = document.into_actor();
-        if actor.id != *actor_id {
-            return Err(ActorResolveError::ActorIdMismatch {
-                requested: actor_id.to_string(),
-                returned: actor.id.to_string(),
-            });
-        }
 
-        Ok(actor)
+        Ok(body)
     }
 }
 
@@ -189,21 +217,21 @@ pub enum ActorResolveError {
     #[error("failed to build actor resolution HTTP client")]
     BuildClient(#[source] reqwest::Error),
 
-    #[error("invalid remote actor ID: {0}")]
-    InvalidActorId(String),
+    #[error("invalid remote ActivityPub resource ID: {0}")]
+    InvalidResourceId(String),
 
-    #[error("remote actor {actor} uses non-public address {address}")]
-    PrivateActorAddress {
-        actor: String,
+    #[error("remote ActivityPub resource {resource} uses non-public address {address}")]
+    PrivateResourceAddress {
+        resource: String,
         address: std::net::IpAddr,
     },
 
-    #[error("failed to fetch remote actor")]
+    #[error("failed to fetch remote ActivityPub resource")]
     Request(#[source] reqwest::Error),
 
-    #[error("fetching remote actor {actor} returned {status}")]
+    #[error("fetching remote ActivityPub resource {resource} returned {status}")]
     UnsuccessfulStatus {
-        actor: String,
+        resource: String,
         status: HttpStatusCode,
     },
 
@@ -218,4 +246,7 @@ pub enum ActorResolveError {
 
     #[error("remote actor ID mismatch: requested {requested}, returned {returned}")]
     ActorIdMismatch { requested: String, returned: String },
+
+    #[error("remote ActivityPub document does not contain key {0}")]
+    KeyNotFound(String),
 }

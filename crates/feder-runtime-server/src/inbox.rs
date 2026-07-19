@@ -65,16 +65,23 @@ fn accept_id_for_follow(
 async fn verify_inbox_request(
     app_state: &AppState,
     req: &InboxRequest,
+    activity_actor_id: Option<&Iri>,
 ) -> Result<Option<Actor>, StatusCode> {
     match app_state.inbox_auth_policy {
         InboxAuthPolicy::AllowUnsignedInsecureDev => Ok(None),
-        InboxAuthPolicy::RequireSigned => verify_signed_request(app_state, req).await.map(Some),
+        InboxAuthPolicy::RequireSigned => {
+            let activity_actor_id = activity_actor_id.ok_or(StatusCode::UNAUTHORIZED)?;
+            verify_signed_request(app_state, req, activity_actor_id)
+                .await
+                .map(Some)
+        }
     }
 }
 
 async fn verify_signed_request(
     app_state: &AppState,
     req: &InboxRequest,
+    activity_actor_id: &Iri,
 ) -> Result<Actor, StatusCode> {
     let signature_header = req
         .headers
@@ -115,24 +122,12 @@ async fn verify_signed_request(
         .key_id
         .parse()
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    let mut actor_url =
-        reqwest::Url::parse(key_id.as_str()).map_err(|_| StatusCode::UNAUTHORIZED)?;
-    actor_url.set_fragment(None);
-    let actor_id: Iri = actor_url
-        .as_str()
-        .parse()
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    let actor = app_state
+    let public_key = app_state
         .actor_resolver
-        .resolve(&actor_id)
+        .resolve_key(&key_id)
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
-    let Reference::Object(public_key) =
-        actor.public_key.as_ref().ok_or(StatusCode::UNAUTHORIZED)?
-    else {
-        return Err(StatusCode::UNAUTHORIZED);
-    };
-    if public_key.id != key_id || public_key.owner != actor.id {
+    if public_key.owner != *activity_actor_id {
         return Err(StatusCode::UNAUTHORIZED);
     }
 
@@ -149,7 +144,33 @@ async fn verify_signed_request(
     )
     .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
+    let actor = app_state
+        .actor_resolver
+        .resolve(activity_actor_id)
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let actor_owns_key = match actor.public_key.as_ref() {
+        Some(Reference::Id(advertised_key_id)) => advertised_key_id == &public_key.id,
+        Some(Reference::Object(advertised_key)) => {
+            advertised_key.id == public_key.id
+                && advertised_key.owner == actor.id
+                && advertised_key.public_key_pem == public_key.public_key_pem
+        }
+        None => false,
+    };
+    if !actor_owns_key {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
     Ok(actor)
+}
+
+fn activity_actor_id(value: &Value) -> Option<Iri> {
+    let actor = value.get("actor")?;
+    let actor_id = actor
+        .as_str()
+        .or_else(|| actor.get("id").and_then(Value::as_str))?;
+    actor_id.parse().ok()
 }
 
 fn verify_request_date(headers: &HeaderMap) -> Result<(), StatusCode> {
@@ -305,9 +326,9 @@ pub async fn inbox(
         body,
     };
 
-    let verified_actor = verify_inbox_request(&app_state, &req).await?;
-
     let value: Value = from_slice(&req.body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let activity_actor_id = activity_actor_id(&value);
+    let verified_actor = verify_inbox_request(&app_state, &req, activity_actor_id.as_ref()).await?;
 
     let activity_type = value.get("type").and_then(|value| value.as_str());
 

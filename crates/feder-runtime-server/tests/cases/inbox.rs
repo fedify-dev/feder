@@ -70,12 +70,46 @@ async fn spawn_actor_server() -> (
     tokio::sync::mpsc::Receiver<RecordedRequest>,
     tokio::task::JoinHandle<()>,
 ) {
+    let (actor_id, _key_id, receiver, task) = spawn_actor_server_inner(false).await;
+    (actor_id, receiver, task)
+}
+
+async fn spawn_actor_server_with_separate_key() -> (
+    String,
+    String,
+    tokio::sync::mpsc::Receiver<RecordedRequest>,
+    tokio::task::JoinHandle<()>,
+) {
+    spawn_actor_server_inner(true).await
+}
+
+async fn spawn_actor_server_inner(
+    separate_key: bool,
+) -> (
+    String,
+    String,
+    tokio::sync::mpsc::Receiver<RecordedRequest>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind actor server");
     let address = listener.local_addr().expect("actor server address");
     let actor_id = format!("http://{address}/users/bob");
+    let key_id = if separate_key {
+        format!("http://{address}/keys/1")
+    } else {
+        format!("{actor_id}#main-key")
+    };
     let inbox = format!("http://{address}/inbox");
+    let public_key = json!({
+        "id": key_id,
+        "type": "CryptographicKey",
+        "owner": actor_id,
+        "publicKeyPem": fixture_actor_key_pair()
+            .expect("load actor key fixture")
+            .public_key_pem()
+    });
     let actor = json!({
         "@context": [
             "https://www.w3.org/ns/activitystreams",
@@ -87,14 +121,7 @@ async fn spawn_actor_server() -> (
         "outbox": format!("http://{address}/users/bob/outbox"),
         "preferredUsername": "bob",
         "endpoints": { "sharedInbox": inbox },
-        "publicKey": {
-            "id": format!("{actor_id}#main-key"),
-            "type": "CryptographicKey",
-            "owner": actor_id,
-            "publicKeyPem": fixture_actor_key_pair()
-                .expect("load actor key fixture")
-                .public_key_pem()
-        }
+        "publicKey": if separate_key { json!(key_id) } else { public_key.clone() }
     });
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     let app = Router::new()
@@ -103,6 +130,18 @@ async fn spawn_actor_server() -> (
             get(move || {
                 let actor = actor.clone();
                 async move { ([(CONTENT_TYPE, "application/activity+json")], Json(actor)) }
+            }),
+        )
+        .route(
+            "/keys/1",
+            get(move || {
+                let public_key = public_key.clone();
+                async move {
+                    (
+                        [(CONTENT_TYPE, "application/activity+json")],
+                        Json(public_key),
+                    )
+                }
             }),
         )
         .route(
@@ -124,7 +163,7 @@ async fn spawn_actor_server() -> (
             .expect("serve actor endpoint");
     });
 
-    (actor_id, receiver, task)
+    (actor_id, key_id, receiver, task)
 }
 
 async fn post_inbox(
@@ -148,7 +187,7 @@ async fn post_inbox(
 async fn post_signed_inbox(
     app: Router,
     uri: &str,
-    actor_id: &str,
+    key_id: &str,
     signed_body: &[u8],
     delivered_body: impl Into<Body>,
 ) -> axum::response::Response {
@@ -163,7 +202,7 @@ async fn post_signed_inbox(
     ];
     let signature = sign_draft_cavage(
         &fixture_actor_key_pair().expect("load actor key fixture"),
-        &format!("{actor_id}#main-key"),
+        key_id,
         "POST",
         uri,
         &headers,
@@ -281,7 +320,39 @@ async fn verifies_signed_id_only_follow() {
     let response = post_signed_inbox(
         router_with_state(state.clone()),
         "/users/alice/inbox",
-        &actor_id,
+        &format!("{actor_id}#main-key"),
+        &body,
+        body.clone(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        state
+            .core
+            .lock()
+            .expect("core lock")
+            .state()
+            .followers()
+            .len(),
+        1
+    );
+    requests.recv().await.expect("receive Accept request");
+    actor_server.abort();
+}
+
+#[tokio::test]
+async fn verifies_signed_follow_with_independent_key_id() {
+    let (actor_id, key_id, mut requests, actor_server) =
+        spawn_actor_server_with_separate_key().await;
+    let mut config = test_config();
+    config.inbox_auth_policy = InboxAuthPolicy::RequireSigned;
+    let state = test_app_state(config).expect("build app state");
+    let body = id_only_follow_body(&actor_id);
+    let response = post_signed_inbox(
+        router_with_state(state.clone()),
+        "/users/alice/inbox",
+        &key_id,
         &body,
         body.clone(),
     )
@@ -313,7 +384,7 @@ async fn signed_follow_rejects_tampered_body() {
     let response = post_signed_inbox(
         router_with_state(state.clone()),
         "/users/alice/inbox",
-        &actor_id,
+        &format!("{actor_id}#main-key"),
         &signed_body,
         delivered_body,
     )
@@ -342,7 +413,7 @@ async fn signed_follow_rejects_actor_different_from_key_owner() {
     let response = post_signed_inbox(
         router_with_state(state.clone()),
         "/users/alice/inbox",
-        &actor_id,
+        &format!("{actor_id}#main-key"),
         &body,
         body.clone(),
     )
