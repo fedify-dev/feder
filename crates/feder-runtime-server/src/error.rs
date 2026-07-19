@@ -29,4 +29,7 @@ pub enum Error {
 
     #[error("activity sender setup failed")]
     ActivitySender(#[from] crate::send::SendError),
+
+    #[error("actor resolver setup failed")]
+    ActorResolver(#[from] crate::actor::ActorResolveError),
 }

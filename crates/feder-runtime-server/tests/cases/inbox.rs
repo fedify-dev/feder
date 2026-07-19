@@ -14,9 +14,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use axum::{
-    Router,
-    body::Body,
-    http::{Request, StatusCode, header::CONTENT_TYPE},
+    Json, Router,
+    body::{Body, Bytes},
+    http::{HeaderMap, Request, StatusCode, Uri, header::CONTENT_TYPE},
+    routing::{get, post},
 };
 use feder_runtime_server::{
     app::router_with_state,
@@ -27,7 +28,8 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crate::common::{
-    spawn_inbox_server, temporary_database_path, test_app_state, test_config, test_router,
+    RecordedRequest, spawn_inbox_server, temporary_database_path, test_app_state, test_config,
+    test_router,
 };
 
 fn follow_body() -> Vec<u8> {
@@ -49,6 +51,71 @@ fn follow_body_for_inbox(inbox: &str) -> Vec<u8> {
         "object": "http://127.0.0.1:3000/users/alice"
     }))
     .expect("serialize follow")
+}
+
+fn id_only_follow_body(actor_id: &str) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "type": "Follow",
+        "id": format!("{actor_id}/follows/1"),
+        "actor": actor_id,
+        "object": "http://127.0.0.1:3000/users/alice"
+    }))
+    .expect("serialize ID-only follow")
+}
+
+async fn spawn_actor_server() -> (
+    String,
+    tokio::sync::mpsc::Receiver<RecordedRequest>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind actor server");
+    let address = listener.local_addr().expect("actor server address");
+    let actor_id = format!("http://{address}/users/bob");
+    let inbox = format!("http://{address}/inbox");
+    let actor = json!({
+        "@context": [
+            "https://www.w3.org/ns/activitystreams",
+            { "toot": "http://joinmastodon.org/ns#" }
+        ],
+        "type": "Person",
+        "id": actor_id,
+        "inbox": inbox,
+        "outbox": format!("http://{address}/users/bob/outbox"),
+        "preferredUsername": "bob",
+        "endpoints": { "sharedInbox": inbox }
+    });
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    let app = Router::new()
+        .route(
+            "/users/bob",
+            get(move || {
+                let actor = actor.clone();
+                async move { ([(CONTENT_TYPE, "application/activity+json")], Json(actor)) }
+            }),
+        )
+        .route(
+            "/inbox",
+            post(move |headers: HeaderMap, uri: Uri, body: Bytes| {
+                let sender = sender.clone();
+                async move {
+                    sender
+                        .send(RecordedRequest { headers, uri, body })
+                        .await
+                        .expect("request receiver remains open");
+                    StatusCode::ACCEPTED
+                }
+            }),
+        );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve actor endpoint");
+    });
+
+    (actor_id, receiver, task)
 }
 
 async fn post_inbox(
@@ -112,6 +179,46 @@ async fn valid_follow_reaches_core() {
         "https://remote.example/activities/follow-1"
     );
     inbox_server.abort();
+}
+
+#[tokio::test]
+async fn resolves_id_only_follower_and_sends_accept() {
+    let (actor_id, mut requests, actor_server) = spawn_actor_server().await;
+    let state = test_app_state(test_config()).expect("build app state");
+    let response = post_inbox(
+        router_with_state(state.clone()),
+        "/users/alice/inbox",
+        "application/activity+json",
+        id_only_follow_body(&actor_id),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    let followers = state
+        .store
+        .lock()
+        .expect("store lock")
+        .list_followers(&state.local_actor.id)
+        .expect("list followers");
+    assert_eq!(followers.len(), 1);
+    assert_eq!(followers[0].follower.as_str(), actor_id);
+    assert_eq!(
+        followers[0]
+            .inbox
+            .as_ref()
+            .expect("resolved inbox")
+            .as_str(),
+        format!("{}/inbox", actor_id.trim_end_matches("/users/bob"))
+    );
+
+    let request = requests.recv().await.expect("receive Accept request");
+    assert!(request.headers.contains_key("signature"));
+    let activity: serde_json::Value =
+        serde_json::from_slice(&request.body).expect("valid sent activity");
+    assert_eq!(activity["type"], "Accept");
+    assert_eq!(activity["object"]["actor"]["id"], actor_id);
+    actor_server.abort();
 }
 
 #[tokio::test]

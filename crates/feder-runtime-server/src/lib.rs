@@ -23,6 +23,7 @@ pub mod storage;
 mod url;
 pub mod webfinger;
 
+pub use actor::{ActorResolveError, ActorResolver};
 pub use app::{AppState, build_router};
 pub use config::{InboxAuthPolicy, OutboundAddressPolicy, RuntimeConfig, StorageConfig};
 pub use error::Error;

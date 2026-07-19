@@ -16,6 +16,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::Error;
+use crate::actor::ActorResolver;
 use crate::config::{InboxAuthPolicy, RuntimeConfig, StorageConfig};
 use crate::send::ActivitySender;
 use crate::storage::{RuntimeStore, SqliteStore};
@@ -36,6 +37,7 @@ pub struct AppState {
     pub core: Arc<Mutex<FederCore>>,
     pub store: Arc<Mutex<SqliteStore>>,
     pub actor_key_pair: Arc<ActorKeyPair>,
+    pub actor_resolver: ActorResolver,
     pub activity_sender: ActivitySender,
     pub local_actor: Actor,
     pub username: String,
@@ -72,6 +74,7 @@ impl AppState {
         )));
         let core = FederCore::new(FederConfig::new(actor.clone()));
         let actor_key_pair = Arc::new(actor_key_pair);
+        let actor_resolver = ActorResolver::new(config.outbound_address_policy)?;
         let activity_sender = ActivitySender::new(
             actor_key_pair.clone(),
             key_id.to_string(),
@@ -82,6 +85,7 @@ impl AppState {
             core: Arc::new(Mutex::new(core)),
             store: Arc::new(Mutex::new(store)),
             actor_key_pair,
+            actor_resolver,
             activity_sender,
             local_actor: actor,
             username: config.username,

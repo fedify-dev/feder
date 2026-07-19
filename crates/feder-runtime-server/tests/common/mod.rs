@@ -24,6 +24,7 @@ use axum::{
 use feder_core::{FederConfig, FederCore, http_signatures::ActorKeyPair};
 use feder_runtime_server::{
     Error,
+    actor::ActorResolver,
     app::{AppState, router_with_state},
     config::{InboxAuthPolicy, OutboundAddressPolicy, RuntimeConfig, StorageConfig},
     send::ActivitySender,
@@ -117,6 +118,7 @@ pub fn test_app_state(config: RuntimeConfig) -> Result<AppState, Error> {
     )));
     let core = FederCore::new(FederConfig::new(actor.clone()));
     let actor_key_pair = Arc::new(actor_key_pair);
+    let actor_resolver = ActorResolver::new(config.outbound_address_policy)?;
     let activity_sender = ActivitySender::new(
         actor_key_pair.clone(),
         key_id.to_string(),
@@ -127,6 +129,7 @@ pub fn test_app_state(config: RuntimeConfig) -> Result<AppState, Error> {
         core: Arc::new(Mutex::new(core)),
         store: Arc::new(Mutex::new(store)),
         actor_key_pair,
+        actor_resolver,
         activity_sender,
         local_actor: actor,
         username: config.username,

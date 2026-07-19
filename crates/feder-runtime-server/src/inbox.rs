@@ -98,7 +98,19 @@ pub async fn inbox(
     if activity_type != Some("Follow") {
         return Ok(StatusCode::ACCEPTED.into_response());
     }
-    let follow: Follow = from_value(value).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let mut follow: Follow = from_value(value).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let follows_local_actor = match &follow.object {
+        feder_vocab::Reference::Id(actor_id) => actor_id == &app_state.local_actor.id,
+        feder_vocab::Reference::Object(actor) => actor.id == app_state.local_actor.id,
+    };
+    if !follows_local_actor {
+        return Ok(StatusCode::ACCEPTED.into_response());
+    }
+    app_state
+        .actor_resolver
+        .resolve_reference(&mut follow.actor)
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
     let accept_id = accept_id_for_follow(&app_state.local_actor.id, &follow.id)?;
     let input = Input::received_follow(follow, accept_id);
 
