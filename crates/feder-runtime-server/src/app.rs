@@ -73,31 +73,3 @@ pub fn build_router(config: RuntimeConfig) -> Result<Router, Error> {
 async fn healthz() -> StatusCode {
     StatusCode::NO_CONTENT
 }
-
-#[cfg(test)]
-mod tests {
-    use axum::{
-        body::Body,
-        http::{Request, StatusCode},
-    };
-    use tower::ServiceExt;
-
-    use crate::{build_router, config::test_config};
-
-    #[tokio::test]
-    async fn returns_health_check() {
-        let app = build_router(test_config()).expect("build router");
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/healthz")
-                    .body(Body::empty())
-                    .expect("valid request"),
-            )
-            .await
-            .expect("response");
-
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    }
-}

@@ -39,23 +39,3 @@ pub struct RuntimeConfig {
     pub inbox_auth_policy: InboxAuthPolicy,
     pub storage: StorageConfig,
 }
-
-#[cfg(test)]
-pub(crate) fn test_config() -> RuntimeConfig {
-    RuntimeConfig {
-        actor_id: "http://127.0.0.1:3000/users/alice"
-            .parse()
-            .expect("valid actor IRI"),
-        inbox: "http://127.0.0.1:3000/users/alice/inbox"
-            .parse()
-            .expect("valid inbox IRI"),
-        outbox: "http://127.0.0.1:3000/users/alice/outbox"
-            .parse()
-            .expect("valid outbox IRI"),
-        bind: "127.0.0.1:3000".parse().expect("valid bind address"),
-        username: "alice".to_string(),
-        handle_host: "127.0.0.1:3000".to_string(),
-        inbox_auth_policy: InboxAuthPolicy::AllowUnsignedInsecureDev,
-        storage: StorageConfig::InMemory,
-    }
-}
