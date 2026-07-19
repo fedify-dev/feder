@@ -233,7 +233,7 @@ pub enum CryptographicKeyType {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CryptographicKey {
     pub id: Iri,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub kind: CryptographicKeyType,
     pub owner: Iri,
     #[serde(rename = "publicKeyPem")]
@@ -441,6 +441,18 @@ mod tests {
     use alloc::string::ToString;
     use serde::de::DeserializeOwned;
     use serde_json::json;
+
+    #[test]
+    fn cryptographic_key_defaults_missing_type() {
+        let key: CryptographicKey = serde_json::from_value(serde_json::json!({
+            "id": "https://example.com/users/alice#main-key",
+            "owner": "https://example.com/users/alice",
+            "publicKeyPem": "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----"
+        }))
+        .expect("deserialize key without type");
+
+        assert_eq!(key.kind, CryptographicKeyType::CryptographicKey);
+    }
 
     fn roundtrip<T>(value: &T) -> T
     where

@@ -104,7 +104,6 @@ async fn spawn_actor_server_inner(
     let inbox = format!("http://{address}/inbox");
     let public_key = json!({
         "id": key_id,
-        "type": "CryptographicKey",
         "owner": actor_id,
         "publicKeyPem": fixture_actor_key_pair()
             .expect("load actor key fixture")
