@@ -26,6 +26,7 @@ use serde_json::{Value, from_slice, from_value};
 
 use crate::app::AppState;
 use crate::config::InboxAuthPolicy;
+use crate::send::SendError;
 use crate::storage::RuntimeStore;
 
 pub struct InboxRequest {
@@ -115,6 +116,17 @@ pub async fn inbox(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .persist_actions(&result.actions)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    app_state
+        .activity_sender
+        .send_actions(&result.actions)
+        .await
+        .map_err(|error| match error {
+            SendError::Request(_) | SendError::UnsuccessfulStatus { .. } => StatusCode::BAD_GATEWAY,
+            SendError::BuildClient(_)
+            | SendError::Serialize(_)
+            | SendError::UnsupportedActivity => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
 
     Ok(StatusCode::ACCEPTED.into_response())
 }

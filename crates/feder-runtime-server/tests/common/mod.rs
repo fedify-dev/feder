@@ -15,16 +15,58 @@
 
 use std::sync::{Arc, Mutex};
 
-use axum::Router;
+use axum::{
+    Router,
+    body::Bytes,
+    http::{HeaderMap, StatusCode},
+    routing::post,
+};
 use feder_core::{FederConfig, FederCore, http_signatures::ActorKeyPair};
 use feder_runtime_server::{
     Error,
     app::{AppState, router_with_state},
     config::{InboxAuthPolicy, RuntimeConfig, StorageConfig},
+    send::ActivitySender,
     storage::{RuntimeStore, SqliteStore},
 };
 use feder_vocab::{Actor, CryptographicKey, Reference};
 use iri_string::types::IriFragmentStr;
+use tokio::{sync::mpsc, task::JoinHandle};
+
+pub struct RecordedRequest {
+    pub headers: HeaderMap,
+    pub body: Bytes,
+}
+
+pub async fn spawn_inbox_server(
+    response_status: StatusCode,
+) -> (String, mpsc::Receiver<RecordedRequest>, JoinHandle<()>) {
+    let (sender, receiver) = mpsc::channel(1);
+    let app = Router::new().route(
+        "/inbox",
+        post(move |headers: HeaderMap, body: Bytes| {
+            let sender = sender.clone();
+            async move {
+                sender
+                    .send(RecordedRequest { headers, body })
+                    .await
+                    .expect("request receiver remains open");
+                response_status
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind inbox server");
+    let address = listener.local_addr().expect("inbox server address");
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve inbox endpoint");
+    });
+
+    (format!("http://{address}/inbox"), receiver, task)
+}
 
 pub fn test_config() -> RuntimeConfig {
     RuntimeConfig {
@@ -72,11 +114,13 @@ pub fn test_app_state(config: RuntimeConfig) -> Result<AppState, Error> {
         actor_key_pair.public_key_pem().to_string(),
     )));
     let core = FederCore::new(FederConfig::new(actor.clone()));
+    let activity_sender = ActivitySender::new()?;
 
     Ok(AppState {
         core: Arc::new(Mutex::new(core)),
         store: Arc::new(Mutex::new(store)),
         actor_key_pair: Arc::new(actor_key_pair),
+        activity_sender,
         local_actor: actor,
         username: config.username,
         handle_host: config.handle_host,

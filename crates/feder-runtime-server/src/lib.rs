@@ -18,6 +18,7 @@ pub mod app;
 pub mod config;
 pub mod error;
 pub mod inbox;
+pub mod send;
 pub mod storage;
 pub mod webfinger;
 

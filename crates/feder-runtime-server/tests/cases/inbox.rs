@@ -26,9 +26,15 @@ use feder_runtime_server::{
 use serde_json::json;
 use tower::ServiceExt;
 
-use crate::common::{temporary_database_path, test_app_state, test_config, test_router};
+use crate::common::{
+    spawn_inbox_server, temporary_database_path, test_app_state, test_config, test_router,
+};
 
 fn follow_body() -> Vec<u8> {
+    follow_body_for_inbox("https://remote.example/users/bob/inbox")
+}
+
+fn follow_body_for_inbox(inbox: &str) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "@context": "https://www.w3.org/ns/activitystreams",
         "type": "Follow",
@@ -37,7 +43,7 @@ fn follow_body() -> Vec<u8> {
             "@context": "https://www.w3.org/ns/activitystreams",
             "type": "Person",
             "id": "https://remote.example/users/bob",
-            "inbox": "https://remote.example/users/bob/inbox",
+            "inbox": inbox,
             "outbox": "https://remote.example/users/bob/outbox"
         },
         "object": "http://127.0.0.1:3000/users/alice"
@@ -65,32 +71,75 @@ async fn post_inbox(
 
 #[tokio::test]
 async fn valid_follow_reaches_core() {
+    let (inbox, mut requests, inbox_server) = spawn_inbox_server(StatusCode::ACCEPTED).await;
     let state = test_app_state(test_config()).expect("build app state");
     let response = post_inbox(
         router_with_state(state.clone()),
         "/users/alice/inbox",
         "application/activity+json",
-        follow_body(),
+        follow_body_for_inbox(&inbox),
     )
     .await;
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-    let core = state.core.lock().expect("core lock");
-    assert_eq!(core.state().followers().len(), 1);
+    {
+        let core = state.core.lock().expect("core lock");
+        assert_eq!(core.state().followers().len(), 1);
+        assert_eq!(
+            core.state().followers()[0].follower.as_str(),
+            "https://remote.example/users/bob"
+        );
+        assert_eq!(
+            core.state().followers()[0].following.as_str(),
+            "http://127.0.0.1:3000/users/alice"
+        );
+        assert_eq!(core.state().delivery_targets().len(), 1);
+        assert_eq!(core.state().delivery_targets()[0].inbox.as_str(), inbox);
+    }
+
+    let request = requests.recv().await.expect("receive Accept request");
     assert_eq!(
-        core.state().followers()[0].follower.as_str(),
-        "https://remote.example/users/bob"
+        request.headers.get(CONTENT_TYPE).unwrap(),
+        "application/activity+json"
     );
+    let activity: serde_json::Value =
+        serde_json::from_slice(&request.body).expect("valid sent activity");
+    assert_eq!(activity["type"], "Accept");
+    assert_eq!(activity["actor"], "http://127.0.0.1:3000/users/alice");
     assert_eq!(
-        core.state().followers()[0].following.as_str(),
-        "http://127.0.0.1:3000/users/alice"
+        activity["object"]["id"],
+        "https://remote.example/activities/follow-1"
     );
-    assert_eq!(core.state().delivery_targets().len(), 1);
+    inbox_server.abort();
+}
+
+#[tokio::test]
+async fn send_failure_returns_bad_gateway_after_core_handling() {
+    let (inbox, mut requests, inbox_server) =
+        spawn_inbox_server(StatusCode::INTERNAL_SERVER_ERROR).await;
+    let state = test_app_state(test_config()).expect("build app state");
+    let response = post_inbox(
+        router_with_state(state.clone()),
+        "/users/alice/inbox",
+        "application/activity+json",
+        follow_body_for_inbox(&inbox),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(
-        core.state().delivery_targets()[0].inbox.as_str(),
-        "https://remote.example/users/bob/inbox"
+        state
+            .core
+            .lock()
+            .expect("core lock")
+            .state()
+            .followers()
+            .len(),
+        1
     );
+    requests.recv().await.expect("receive failed request");
+    inbox_server.abort();
 }
 
 #[tokio::test]
@@ -236,6 +285,7 @@ async fn rejects_oversized_inbox_body() {
 
 #[tokio::test]
 async fn sqlite_storage_persists_followers_across_app_state_reopen() {
+    let (inbox, mut requests, inbox_server) = spawn_inbox_server(StatusCode::ACCEPTED).await;
     let path = temporary_database_path("feder-runtime-server-test");
     let mut config = test_config();
     config.storage = StorageConfig::Sqlite { path: path.clone() };
@@ -244,11 +294,13 @@ async fn sqlite_storage_persists_followers_across_app_state_reopen() {
         router_with_state(state.clone()),
         "/users/alice/inbox",
         "application/activity+json",
-        follow_body(),
+        follow_body_for_inbox(&inbox),
     )
     .await;
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
+    requests.recv().await.expect("receive Accept request");
+    inbox_server.abort();
     drop(state);
 
     let mut config = test_config();

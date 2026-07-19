@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::Error;
 use crate::config::{InboxAuthPolicy, RuntimeConfig, StorageConfig};
+use crate::send::ActivitySender;
 use crate::storage::{RuntimeStore, SqliteStore};
 use crate::webfinger::webfinger;
 use crate::{actor::actor, inbox::inbox};
@@ -35,6 +36,7 @@ pub struct AppState {
     pub core: Arc<Mutex<FederCore>>,
     pub store: Arc<Mutex<SqliteStore>>,
     pub actor_key_pair: Arc<ActorKeyPair>,
+    pub activity_sender: ActivitySender,
     pub local_actor: Actor,
     pub username: String,
     pub handle_host: String,
@@ -69,11 +71,13 @@ impl AppState {
             actor_key_pair.public_key_pem().to_string(),
         )));
         let core = FederCore::new(FederConfig::new(actor.clone()));
+        let activity_sender = ActivitySender::new()?;
 
         Ok(Self {
             core: Arc::new(Mutex::new(core)),
             store: Arc::new(Mutex::new(store)),
             actor_key_pair: Arc::new(actor_key_pair),
+            activity_sender,
             local_actor: actor,
             username: config.username,
             handle_host: config.handle_host,

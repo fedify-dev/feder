@@ -21,5 +21,7 @@ mod actor;
 mod app;
 #[path = "cases/inbox.rs"]
 mod inbox;
+#[path = "cases/send.rs"]
+mod send;
 #[path = "cases/webfinger.rs"]
 mod webfinger;

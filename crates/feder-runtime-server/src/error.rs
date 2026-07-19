@@ -26,4 +26,7 @@ pub enum Error {
 
     #[error("actor key generation failed")]
     ActorKeyGeneration(#[from] feder_core::http_signatures::KeyError),
+
+    #[error("activity sender setup failed")]
+    ActivitySender(#[from] crate::send::SendError),
 }
