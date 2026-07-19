@@ -15,6 +15,7 @@
 
 use std::{sync::Arc, time::SystemTime};
 
+use crate::{config::OutboundAddressPolicy, outbound_network};
 use feder_core::{
     Action, Activity, SendActivity,
     http_signatures::{
@@ -24,7 +25,6 @@ use feder_core::{
 use reqwest::{
     Client, StatusCode, Url,
     header::{CONTENT_TYPE, DATE, HOST},
-    redirect::Policy,
 };
 
 /// Sends core `SendActivity` actions as signed ActivityPub HTTP requests.
@@ -33,20 +33,24 @@ pub struct ActivitySender {
     client: Client,
     key_pair: Arc<ActorKeyPair>,
     key_id: String,
+    address_policy: OutboundAddressPolicy,
 }
 
 impl ActivitySender {
     /// Creates an activity sender for one actor identity.
-    pub fn new(key_pair: Arc<ActorKeyPair>, key_id: String) -> Result<Self, SendError> {
-        let client = Client::builder()
-            .redirect(Policy::none())
-            .build()
-            .map_err(SendError::BuildClient)?;
+    pub fn new(
+        key_pair: Arc<ActorKeyPair>,
+        key_id: String,
+        address_policy: OutboundAddressPolicy,
+    ) -> Result<Self, SendError> {
+        let client =
+            outbound_network::build_client(address_policy).map_err(SendError::BuildClient)?;
 
         Ok(Self {
             client,
             key_pair,
             key_id,
+            address_policy,
         })
     }
 
@@ -78,6 +82,12 @@ impl ActivitySender {
         if !matches!(url.scheme(), "http" | "https") {
             return Err(SendError::InvalidInbox(send.inbox.to_string()));
         }
+        outbound_network::validate_literal_host(&url, self.address_policy).map_err(|address| {
+            SendError::PrivateInboxAddress {
+                inbox: send.inbox.to_string(),
+                address,
+            }
+        })?;
         let mut host = url
             .host()
             .ok_or_else(|| SendError::InvalidInbox(send.inbox.to_string()))?
@@ -141,6 +151,12 @@ pub enum SendError {
 
     #[error("invalid recipient inbox: {0}")]
     InvalidInbox(String),
+
+    #[error("recipient inbox {inbox} resolves to non-public address {address}")]
+    PrivateInboxAddress {
+        inbox: String,
+        address: std::net::IpAddr,
+    },
 
     #[error("failed to sign activity request")]
     Sign(#[source] HttpSignatureError),

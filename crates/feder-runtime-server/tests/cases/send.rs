@@ -18,9 +18,10 @@ use feder_core::{
     Action, Activity, SendActivity,
     http_signatures::{ActorKeyPair, sign_draft_cavage},
 };
+use feder_runtime_server::{OutboundAddressPolicy, send::SendError};
 use feder_vocab::{Create, Note, Reference};
 
-use crate::common::{spawn_inbox_server, test_activity_sender};
+use crate::common::{spawn_inbox_server, test_activity_sender, test_activity_sender_with_policy};
 
 fn create_note_send_action(inbox: &str) -> Action {
     let actor_id = "https://local.example/users/alice"
@@ -126,4 +127,50 @@ async fn attempts_later_sends_after_failure() {
         .expect("receive later request");
     failed_server.abort();
     successful_server.abort();
+}
+
+#[tokio::test]
+async fn blocks_literal_private_inbox_address() {
+    let (inbox, mut requests, inbox_server) = spawn_inbox_server(StatusCode::ACCEPTED).await;
+    let actions = [create_note_send_action(&inbox)];
+
+    let result = test_activity_sender_with_policy(OutboundAddressPolicy::PublicOnly)
+        .send_actions(&actions)
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(SendError::PrivateInboxAddress { address, .. }) if address.is_loopback()
+    ));
+    assert!(requests.try_recv().is_err());
+    inbox_server.abort();
+}
+
+#[tokio::test]
+async fn blocks_hostname_resolving_to_private_address() {
+    let (inbox, mut requests, inbox_server) = spawn_inbox_server(StatusCode::ACCEPTED).await;
+    let inbox = inbox.replacen("127.0.0.1", "localhost", 1);
+    let actions = [create_note_send_action(&inbox)];
+
+    let result = test_activity_sender_with_policy(OutboundAddressPolicy::PublicOnly)
+        .send_actions(&actions)
+        .await;
+
+    assert!(matches!(result, Err(SendError::Request(_))));
+    assert!(requests.try_recv().is_err());
+    inbox_server.abort();
+}
+
+#[tokio::test]
+async fn blocks_special_use_ipv6_inbox_addresses() {
+    let sender = test_activity_sender_with_policy(OutboundAddressPolicy::PublicOnly);
+
+    for address in ["100:0:0:1::1", "2001:2::1", "5f00::1"] {
+        let inbox = format!("http://[{address}]/inbox");
+        let actions = [create_note_send_action(&inbox)];
+
+        let result = sender.send_actions(&actions).await;
+
+        assert!(matches!(result, Err(SendError::PrivateInboxAddress { .. })));
+    }
 }

@@ -13,7 +13,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use feder_runtime_server::{Error, InboxAuthPolicy, RuntimeConfig, StorageConfig, build_router};
+use feder_runtime_server::{
+    Error, InboxAuthPolicy, OutboundAddressPolicy, RuntimeConfig, StorageConfig, build_router,
+};
 
 fn default_local() -> RuntimeConfig {
     RuntimeConfig {
@@ -32,6 +34,7 @@ fn default_local() -> RuntimeConfig {
         username: "alice".to_string(),
         handle_host: "127.0.0.1:3000".to_string(),
         inbox_auth_policy: InboxAuthPolicy::AllowUnsignedInsecureDev,
+        outbound_address_policy: OutboundAddressPolicy::AllowPrivateAddress,
         storage: StorageConfig::InMemory,
     }
 }

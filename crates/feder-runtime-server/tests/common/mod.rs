@@ -25,7 +25,7 @@ use feder_core::{FederConfig, FederCore, http_signatures::ActorKeyPair};
 use feder_runtime_server::{
     Error,
     app::{AppState, router_with_state},
-    config::{InboxAuthPolicy, RuntimeConfig, StorageConfig},
+    config::{InboxAuthPolicy, OutboundAddressPolicy, RuntimeConfig, StorageConfig},
     send::ActivitySender,
     storage::{RuntimeStore, SqliteStore},
 };
@@ -84,6 +84,7 @@ pub fn test_config() -> RuntimeConfig {
         username: "alice".to_string(),
         handle_host: "127.0.0.1:3000".to_string(),
         inbox_auth_policy: InboxAuthPolicy::AllowUnsignedInsecureDev,
+        outbound_address_policy: OutboundAddressPolicy::AllowPrivateAddress,
         storage: StorageConfig::InMemory,
     }
 }
@@ -116,7 +117,11 @@ pub fn test_app_state(config: RuntimeConfig) -> Result<AppState, Error> {
     )));
     let core = FederCore::new(FederConfig::new(actor.clone()));
     let actor_key_pair = Arc::new(actor_key_pair);
-    let activity_sender = ActivitySender::new(actor_key_pair.clone(), key_id.to_string())?;
+    let activity_sender = ActivitySender::new(
+        actor_key_pair.clone(),
+        key_id.to_string(),
+        config.outbound_address_policy,
+    )?;
 
     Ok(AppState {
         core: Arc::new(Mutex::new(core)),
@@ -153,9 +158,14 @@ fn fixture_actor_key_pair() -> Result<ActorKeyPair, feder_core::http_signatures:
 }
 
 pub fn test_activity_sender() -> ActivitySender {
+    test_activity_sender_with_policy(OutboundAddressPolicy::AllowPrivateAddress)
+}
+
+pub fn test_activity_sender_with_policy(policy: OutboundAddressPolicy) -> ActivitySender {
     ActivitySender::new(
         Arc::new(fixture_actor_key_pair().expect("load actor key pair fixture")),
         "https://local.example/users/alice#main-key".to_string(),
+        policy,
     )
     .expect("build activity sender")
 }

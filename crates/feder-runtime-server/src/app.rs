@@ -72,7 +72,11 @@ impl AppState {
         )));
         let core = FederCore::new(FederConfig::new(actor.clone()));
         let actor_key_pair = Arc::new(actor_key_pair);
-        let activity_sender = ActivitySender::new(actor_key_pair.clone(), key_id.to_string())?;
+        let activity_sender = ActivitySender::new(
+            actor_key_pair.clone(),
+            key_id.to_string(),
+            config.outbound_address_policy,
+        )?;
 
         Ok(Self {
             core: Arc::new(Mutex::new(core)),

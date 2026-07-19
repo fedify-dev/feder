@@ -23,6 +23,17 @@ pub enum InboxAuthPolicy {
     AllowUnsignedInsecureDev,
 }
 
+/// Controls which network addresses may receive outgoing activities.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum OutboundAddressPolicy {
+    /// Allows only publicly routable destination addresses.
+    #[default]
+    PublicOnly,
+
+    /// Allows private and special-use destinations. This disables SSRF protection.
+    AllowPrivateAddress,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageConfig {
     InMemory,
@@ -37,5 +48,6 @@ pub struct RuntimeConfig {
     pub username: String,
     pub handle_host: String,
     pub inbox_auth_policy: InboxAuthPolicy,
+    pub outbound_address_policy: OutboundAddressPolicy,
     pub storage: StorageConfig,
 }

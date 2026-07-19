@@ -311,6 +311,7 @@ dependencies = [
  "feder-core",
  "feder-vocab",
  "httpdate",
+ "ipnet",
  "iri-string",
  "percent-encoding",
  "rand_core 0.6.4",
@@ -321,6 +322,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tower",
+ "url",
 ]
 
 [[package]]

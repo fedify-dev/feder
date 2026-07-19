@@ -122,7 +122,9 @@ pub async fn inbox(
         .send_actions(&result.actions)
         .await
         .map_err(|error| match error {
-            SendError::Request(_) | SendError::UnsuccessfulStatus { .. } => StatusCode::BAD_GATEWAY,
+            SendError::PrivateInboxAddress { .. }
+            | SendError::Request(_)
+            | SendError::UnsuccessfulStatus { .. } => StatusCode::BAD_GATEWAY,
             SendError::BuildClient(_)
             | SendError::InvalidInbox(_)
             | SendError::Serialize(_)
