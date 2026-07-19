@@ -23,4 +23,7 @@ pub enum Error {
 
     #[error("storage failed")]
     Storage(#[from] crate::storage::StoreError),
+
+    #[error("actor key generation failed")]
+    ActorKeyGeneration(#[from] feder_core::http_signatures::KeyError),
 }

@@ -17,18 +17,23 @@ use std::sync::{Arc, Mutex};
 
 use crate::Error;
 use crate::config::{InboxAuthPolicy, RuntimeConfig, StorageConfig};
-use crate::storage::SqliteStore;
+use crate::storage::{RuntimeStore, SqliteStore};
 use crate::webfinger::webfinger;
 use crate::{actor::actor, inbox::inbox};
 use axum::routing::post;
 use axum::{Router, extract::DefaultBodyLimit, http::StatusCode, routing::get};
-use feder_core::{FederConfig, FederCore};
+use feder_core::{
+    FederConfig, FederCore,
+    http_signatures::{ActorKeyPair, generate_actor_key_pair},
+};
 use feder_vocab::Actor;
+use rand_core::OsRng;
 
 #[derive(Clone)]
 pub struct AppState {
     pub core: Arc<Mutex<FederCore>>,
     pub store: Arc<Mutex<SqliteStore>>,
+    pub actor_key_pair: Arc<ActorKeyPair>,
     pub local_actor: Actor,
     pub username: String,
     pub handle_host: String,
@@ -42,14 +47,23 @@ impl AppState {
         actor.name = Some(config.username.clone());
 
         let core = FederCore::new(FederConfig::new(actor.clone()));
-        let store = match &config.storage {
+        let mut store = match &config.storage {
             StorageConfig::InMemory => SqliteStore::open_in_memory()?,
             StorageConfig::Sqlite { path } => SqliteStore::open(path)?,
+        };
+        let actor_key_pair = match store.load_actor_key_pair(&actor.id)? {
+            Some(key_pair) => key_pair,
+            None => {
+                let key_pair = generate_actor_key_pair(&mut OsRng)?;
+                store.insert_actor_key_pair(&actor.id, &key_pair)?;
+                key_pair
+            }
         };
 
         Ok(Self {
             core: Arc::new(Mutex::new(core)),
             store: Arc::new(Mutex::new(store)),
+            actor_key_pair: Arc::new(actor_key_pair),
             local_actor: actor,
             username: config.username,
             handle_host: config.handle_host,
@@ -61,13 +75,17 @@ impl AppState {
 pub fn build_router(config: RuntimeConfig) -> Result<Router, Error> {
     let state = AppState::from_config(config)?;
 
-    Ok(Router::new()
+    Ok(router_with_state(state))
+}
+
+pub fn router_with_state(state: AppState) -> Router {
+    Router::new()
         .route("/healthz", get(healthz))
         .route("/.well-known/webfinger", get(webfinger))
         .route("/users/{username}", get(actor))
         .route("/users/{username}/inbox", post(inbox))
         .layer(DefaultBodyLimit::max(1_048_576))
-        .with_state(state))
+        .with_state(state)
 }
 
 async fn healthz() -> StatusCode {
