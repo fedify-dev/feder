@@ -9,7 +9,7 @@ homepage.workspace = true
 repository.workspace = true
 
 [dependencies]
-feder-core.workspace = true
+feder-core = { workspace = true, features = ["http-signatures"] }
 feder-vocab.workspace = true
 axum = "0.8"
 serde.workspace = true

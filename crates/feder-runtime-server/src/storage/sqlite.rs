@@ -15,9 +15,9 @@
 
 use std::path::Path;
 
-use feder_core::Action;
+use feder_core::{Action, http_signatures::ActorKeyPair};
 use feder_vocab::{Actor, Iri, Reference};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::storage::{RuntimeStore, StoreError, StoredFollower, StoredRecipient};
 
@@ -58,6 +58,11 @@ impl SqliteStore {
             );
             CREATE INDEX IF NOT EXISTS idx_followers_following_actor_id
                 ON followers (following_actor_id);
+            CREATE TABLE IF NOT EXISTS keys (
+                actor_id TEXT PRIMARY KEY NOT NULL,
+                private_key_pem TEXT NOT NULL,
+                public_key_pem TEXT NOT NULL
+            );
             "#,
         )?;
 
@@ -178,6 +183,48 @@ impl RuntimeStore for SqliteStore {
         })
         .collect()
     }
+
+    fn insert_actor_key_pair(
+        &mut self,
+        actor_id: &Iri,
+        key_pair: &ActorKeyPair,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            r#"
+            INSERT INTO keys (actor_id, private_key_pem, public_key_pem)
+            VALUES (?1, ?2, ?3)
+            "#,
+            params![
+                actor_id.as_str(),
+                key_pair.private_key_pem(),
+                key_pair.public_key_pem(),
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    fn load_actor_key_pair(&self, actor_id: &Iri) -> Result<Option<ActorKeyPair>, StoreError> {
+        let encoded_keys = self
+            .conn
+            .query_row(
+                r#"
+                SELECT private_key_pem, public_key_pem
+                FROM keys
+                WHERE actor_id = ?1
+                "#,
+                [actor_id.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+
+        encoded_keys
+            .map(|(private_key_pem, public_key_pem)| {
+                ActorKeyPair::from_pem(private_key_pem, public_key_pem)
+            })
+            .transpose()
+            .map_err(StoreError::from)
+    }
 }
 
 fn actor_reference_id(reference: &Reference<Actor>) -> &Iri {
@@ -220,6 +267,9 @@ mod tests {
 
     use super::*;
 
+    const PRIVATE_KEY_PEM: &str = include_str!("../../tests/fixtures/rsa-private-key.pem");
+    const PUBLIC_KEY_PEM: &str = include_str!("../../tests/fixtures/rsa-public-key.pem");
+
     fn iri(value: &str) -> Iri {
         value.parse().expect("valid test IRI")
     }
@@ -237,6 +287,11 @@ mod tests {
             iri(&format!("{id}/inbox")),
             iri(&format!("{id}/outbox")),
         )
+    }
+
+    fn actor_key_pair() -> ActorKeyPair {
+        ActorKeyPair::from_pem(PRIVATE_KEY_PEM.to_string(), PUBLIC_KEY_PEM.to_string())
+            .expect("valid actor key pair fixture")
     }
 
     #[test]
@@ -280,6 +335,128 @@ mod tests {
             .expect("query followers following index");
 
         assert_eq!(index_count, 1);
+    }
+
+    #[test]
+    fn open_in_memory_initializes_keys_table() {
+        let store = SqliteStore::open_in_memory().expect("open in-memory store");
+
+        let columns: Vec<String> = {
+            let mut stmt = store
+                .conn
+                .prepare("PRAGMA table_info(keys)")
+                .expect("prepare keys table info query");
+            stmt.query_map([], |row| row.get("name"))
+                .expect("query keys table info")
+                .collect::<Result<_, _>>()
+                .expect("collect keys table columns")
+        };
+
+        assert_eq!(
+            columns,
+            vec![
+                "actor_id".to_string(),
+                "private_key_pem".to_string(),
+                "public_key_pem".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn actor_key_pair_roundtrips_for_actor() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let actor_id = iri("https://example.com/users/alice");
+        let expected = actor_key_pair();
+
+        store
+            .insert_actor_key_pair(&actor_id, &expected)
+            .expect("insert actor key pair");
+        let actual = store
+            .load_actor_key_pair(&actor_id)
+            .expect("load actor key pair")
+            .expect("stored actor key pair");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn actor_key_pair_persists_across_store_reopen() {
+        let path = std::env::temp_dir().join(format!(
+            "feder-actor-key-test-{}-{}.sqlite3",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time after unix epoch")
+                .as_nanos()
+        ));
+        let actor_id = iri("https://example.com/users/alice");
+        let expected = actor_key_pair();
+
+        {
+            let mut store = SqliteStore::open(&path).expect("open SQLite store");
+            store
+                .insert_actor_key_pair(&actor_id, &expected)
+                .expect("insert actor key pair");
+        }
+
+        let store = SqliteStore::open(&path).expect("reopen SQLite store");
+        let actual = store
+            .load_actor_key_pair(&actor_id)
+            .expect("load actor key pair")
+            .expect("persisted actor key pair");
+
+        assert_eq!(actual, expected);
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_actor_key_pair_returns_none_for_unknown_actor() {
+        let store = SqliteStore::open_in_memory().expect("open in-memory store");
+
+        let key_pair = store
+            .load_actor_key_pair(&iri("https://example.com/users/unknown"))
+            .expect("load actor key pair");
+
+        assert!(key_pair.is_none());
+    }
+
+    #[test]
+    fn load_actor_key_pair_rejects_invalid_stored_keys() {
+        let store = SqliteStore::open_in_memory().expect("open in-memory store");
+        store
+            .conn
+            .execute(
+                r#"
+                INSERT INTO keys (actor_id, private_key_pem, public_key_pem)
+                VALUES (?1, ?2, ?3)
+                "#,
+                params![
+                    "https://example.com/users/alice",
+                    "not a private key",
+                    PUBLIC_KEY_PEM,
+                ],
+            )
+            .expect("insert invalid actor key pair");
+
+        let result = store.load_actor_key_pair(&iri("https://example.com/users/alice"));
+
+        assert!(matches!(result, Err(StoreError::ActorKey(_))));
+    }
+
+    #[test]
+    fn insert_actor_key_pair_refuses_to_replace_existing_key() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let actor_id = iri("https://example.com/users/alice");
+        let key_pair = actor_key_pair();
+
+        store
+            .insert_actor_key_pair(&actor_id, &key_pair)
+            .expect("insert actor key pair");
+        let result = store.insert_actor_key_pair(&actor_id, &key_pair);
+
+        assert!(matches!(result, Err(StoreError::Sqlite(_))));
     }
 
     #[test]
