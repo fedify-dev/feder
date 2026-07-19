@@ -14,7 +14,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use axum::http::StatusCode;
-use feder_core::{Action, Activity, SendActivity};
+use feder_core::{
+    Action, Activity, SendActivity,
+    http_signatures::{ActorKeyPair, sign_draft_cavage},
+};
 use feder_vocab::{Create, Note, Reference};
 
 use crate::common::{spawn_inbox_server, test_activity_sender};
@@ -45,6 +48,7 @@ fn create_note_send_action(inbox: &str) -> Action {
 #[tokio::test]
 async fn sends_create_note_action() {
     let (inbox, mut requests, inbox_server) = spawn_inbox_server(StatusCode::ACCEPTED).await;
+    let inbox = format!("{inbox}?shared=true");
     let actions = [create_note_send_action(&inbox)];
 
     test_activity_sender()
@@ -53,11 +57,12 @@ async fn sends_create_note_action() {
         .expect("send Create activity");
 
     let request = requests.recv().await.expect("receive Create request");
+    assert_eq!(request.uri, "/inbox?shared=true");
     assert_eq!(
         request.headers["host"],
         inbox
             .strip_prefix("http://")
-            .and_then(|value| value.strip_suffix("/inbox"))
+            .and_then(|value| value.split_once('/').map(|(authority, _)| authority))
             .expect("inbox authority")
     );
     assert!(httpdate::parse_http_date(request.headers["date"].to_str().unwrap()).is_ok());
@@ -66,9 +71,29 @@ async fn sends_create_note_action() {
         feder_core::http_signatures::create_sha256_digest_header(&request.body)
     );
     let signature = request.headers["signature"].to_str().unwrap();
-    assert!(signature.starts_with(
-        "keyId=\"https://local.example/users/alice#main-key\",algorithm=\"rsa-sha256\",headers=\"(request-target) content-type date digest host\",signature=\""
-    ));
+    let headers = [
+        (
+            "content-type",
+            request.headers["content-type"].to_str().unwrap(),
+        ),
+        ("date", request.headers["date"].to_str().unwrap()),
+        ("digest", request.headers["digest"].to_str().unwrap()),
+        ("host", request.headers["host"].to_str().unwrap()),
+    ];
+    let key_pair = ActorKeyPair::from_pem(
+        include_str!("../fixtures/rsa-private-key.pem").to_string(),
+        include_str!("../fixtures/rsa-public-key.pem").to_string(),
+    )
+    .expect("load actor key pair fixture");
+    let expected_signature = sign_draft_cavage(
+        &key_pair,
+        "https://local.example/users/alice#main-key",
+        "POST",
+        "/inbox?shared=true",
+        &headers,
+    )
+    .expect("sign captured request");
+    assert_eq!(signature, expected_signature);
     let activity: serde_json::Value =
         serde_json::from_slice(&request.body).expect("valid sent activity");
     assert_eq!(activity["type"], "Create");

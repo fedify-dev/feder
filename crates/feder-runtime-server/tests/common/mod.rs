@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use axum::{
     Router,
     body::Bytes,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, Uri},
     routing::post,
 };
 use feder_core::{FederConfig, FederCore, http_signatures::ActorKeyPair};
@@ -35,6 +35,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 
 pub struct RecordedRequest {
     pub headers: HeaderMap,
+    pub uri: Uri,
     pub body: Bytes,
 }
 
@@ -44,11 +45,11 @@ pub async fn spawn_inbox_server(
     let (sender, receiver) = mpsc::channel(1);
     let app = Router::new().route(
         "/inbox",
-        post(move |headers: HeaderMap, body: Bytes| {
+        post(move |headers: HeaderMap, uri: Uri, body: Bytes| {
             let sender = sender.clone();
             async move {
                 sender
-                    .send(RecordedRequest { headers, body })
+                    .send(RecordedRequest { headers, uri, body })
                     .await
                     .expect("request receiver remains open");
                 response_status

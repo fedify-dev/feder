@@ -93,9 +93,19 @@ impl ActivitySender {
             ("digest", digest.as_str()),
             ("host", host.as_str()),
         ];
-        let signature =
-            sign_draft_cavage(&self.key_pair, &self.key_id, "POST", url.path(), &headers)
-                .map_err(SendError::Sign)?;
+        let mut request_target = url.path().to_string();
+        if let Some(query) = url.query() {
+            request_target.push('?');
+            request_target.push_str(query);
+        }
+        let signature = sign_draft_cavage(
+            &self.key_pair,
+            &self.key_id,
+            "POST",
+            &request_target,
+            &headers,
+        )
+        .map_err(SendError::Sign)?;
 
         let response = self
             .client
