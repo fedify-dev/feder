@@ -13,6 +13,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::{
+    collections::{BTreeMap, HashSet},
+    time::{Duration, SystemTime},
+};
+
 use axum::{
     body::Bytes,
     extract::{Path, State},
@@ -20,14 +25,20 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use feder_core::Input;
-use feder_vocab::Follow;
+use feder_core::{
+    Input,
+    http_signatures::{create_sha256_digest_header, verify_draft_cavage},
+};
+use feder_vocab::{Actor, Follow, Iri, Reference};
 use serde_json::{Value, from_slice, from_value};
 
 use crate::app::AppState;
 use crate::config::InboxAuthPolicy;
 use crate::send::SendError;
 use crate::storage::RuntimeStore;
+
+const MAX_SIGNATURE_AGE: Duration = Duration::from_secs(65 * 60);
+const MAX_CLOCK_SKEW: Duration = Duration::from_secs(60 * 60);
 
 pub struct InboxRequest {
     pub username: String,
@@ -51,11 +62,217 @@ fn accept_id_for_follow(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-fn verify_inbox_request(app_state: &AppState, _req: &InboxRequest) -> Result<(), StatusCode> {
+async fn verify_inbox_request(
+    app_state: &AppState,
+    req: &InboxRequest,
+) -> Result<Option<Actor>, StatusCode> {
     match app_state.inbox_auth_policy {
-        InboxAuthPolicy::AllowUnsignedInsecureDev => Ok(()),
-        InboxAuthPolicy::RequireSigned => Err(StatusCode::UNAUTHORIZED),
+        InboxAuthPolicy::AllowUnsignedInsecureDev => Ok(None),
+        InboxAuthPolicy::RequireSigned => verify_signed_request(app_state, req).await.map(Some),
     }
+}
+
+async fn verify_signed_request(
+    app_state: &AppState,
+    req: &InboxRequest,
+) -> Result<Actor, StatusCode> {
+    let signature_header = req
+        .headers
+        .get("signature")
+        .and_then(|value| value.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let signature = parse_signature_header(signature_header).ok_or(StatusCode::UNAUTHORIZED)?;
+    if signature.algorithm != "rsa-sha256"
+        || signature.signed_headers.first().map(String::as_str) != Some("(request-target)")
+    {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let mut seen_headers = HashSet::new();
+    let mut signed_headers = Vec::new();
+    for name in signature.signed_headers.iter().skip(1) {
+        if name.starts_with('(') || !seen_headers.insert(name.as_str()) {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        let values = req.headers.get_all(name).iter().collect::<Vec<_>>();
+        let [value] = values.as_slice() else {
+            return Err(StatusCode::UNAUTHORIZED);
+        };
+        let value = value.to_str().map_err(|_| StatusCode::UNAUTHORIZED)?;
+        signed_headers.push((name.as_str(), value));
+    }
+    if !["host", "date", "digest"]
+        .iter()
+        .all(|required| seen_headers.contains(required))
+    {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    verify_request_date(&req.headers)?;
+    verify_request_digest(&req.headers, &req.body)?;
+
+    let key_id: Iri = signature
+        .key_id
+        .parse()
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let mut actor_url =
+        reqwest::Url::parse(key_id.as_str()).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    actor_url.set_fragment(None);
+    let actor_id: Iri = actor_url
+        .as_str()
+        .parse()
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let actor = app_state
+        .actor_resolver
+        .resolve(&actor_id)
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let Reference::Object(public_key) =
+        actor.public_key.as_ref().ok_or(StatusCode::UNAUTHORIZED)?
+    else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    if public_key.id != key_id || public_key.owner != actor.id {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let request_target = req
+        .uri
+        .path_and_query()
+        .map_or(req.uri.path(), |value| value.as_str());
+    verify_draft_cavage(
+        &public_key.public_key_pem,
+        req.method.as_str(),
+        request_target,
+        &signed_headers,
+        &signature.signature,
+    )
+    .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    Ok(actor)
+}
+
+fn verify_request_date(headers: &HeaderMap) -> Result<(), StatusCode> {
+    let date = headers
+        .get("date")
+        .and_then(|value| value.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)
+        .and_then(|value| httpdate::parse_http_date(value).map_err(|_| StatusCode::UNAUTHORIZED))?;
+    let now = SystemTime::now();
+    if now
+        .duration_since(date)
+        .is_ok_and(|age| age > MAX_SIGNATURE_AGE)
+        || date
+            .duration_since(now)
+            .is_ok_and(|skew| skew > MAX_CLOCK_SKEW)
+    {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    Ok(())
+}
+
+fn verify_request_digest(headers: &HeaderMap, body: &[u8]) -> Result<(), StatusCode> {
+    let digest = headers
+        .get("digest")
+        .and_then(|value| value.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let expected = create_sha256_digest_header(body);
+    let matches = digest.split(',').any(|entry| {
+        entry
+            .trim()
+            .split_once('=')
+            .is_some_and(|(algorithm, value)| {
+                algorithm.eq_ignore_ascii_case("sha-256")
+                    && expected
+                        .split_once('=')
+                        .is_some_and(|(_, expected)| value == expected)
+            })
+    });
+
+    if matches {
+        Ok(())
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+struct ParsedSignature {
+    key_id: String,
+    algorithm: String,
+    signed_headers: Vec<String>,
+    signature: String,
+}
+
+fn parse_signature_header(header: &str) -> Option<ParsedSignature> {
+    let mut parameters = BTreeMap::new();
+    let mut remaining = header;
+    while !remaining.trim_start().is_empty() {
+        remaining = remaining.trim_start();
+        let equals = remaining.find('=')?;
+        let name = remaining[..equals].trim();
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return None;
+        }
+        remaining = &remaining[equals + 1..];
+        let (value, rest) = parse_quoted_parameter(remaining.trim_start())?;
+        if parameters
+            .insert(name.to_ascii_lowercase(), value)
+            .is_some()
+        {
+            return None;
+        }
+        remaining = rest.trim_start();
+        if remaining.is_empty() {
+            break;
+        }
+        remaining = remaining.strip_prefix(',')?;
+    }
+
+    let key_id = parameters.remove("keyid")?;
+    let algorithm = parameters.remove("algorithm")?;
+    let signed_headers = parameters
+        .remove("headers")?
+        .split_ascii_whitespace()
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    let signature = parameters.remove("signature")?;
+    if key_id.is_empty() || signed_headers.is_empty() || signature.is_empty() {
+        return None;
+    }
+
+    Some(ParsedSignature {
+        key_id,
+        algorithm: algorithm.to_ascii_lowercase(),
+        signed_headers,
+        signature,
+    })
+}
+
+fn parse_quoted_parameter(input: &str) -> Option<(String, &str)> {
+    let input = input.strip_prefix('"')?;
+    let mut value = String::new();
+    let mut escaped = false;
+    for (index, character) in input.char_indices() {
+        if escaped {
+            value.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == '"' {
+            return Some((value, &input[index + character.len_utf8()..]));
+        } else if character.is_control() {
+            return None;
+        } else {
+            value.push(character);
+        }
+    }
+
+    None
 }
 
 pub async fn inbox(
@@ -88,7 +305,7 @@ pub async fn inbox(
         body,
     };
 
-    verify_inbox_request(&app_state, &req)?;
+    let verified_actor = verify_inbox_request(&app_state, &req).await?;
 
     let value: Value = from_slice(&req.body).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -106,11 +323,22 @@ pub async fn inbox(
     if !follows_local_actor {
         return Ok(StatusCode::ACCEPTED.into_response());
     }
-    app_state
-        .actor_resolver
-        .resolve_reference(&mut follow.actor)
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    if let Some(actor) = verified_actor {
+        let actor_matches_signature = match &follow.actor {
+            Reference::Id(actor_id) => actor_id == &actor.id,
+            Reference::Object(follow_actor) => follow_actor.id == actor.id,
+        };
+        if !actor_matches_signature {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        follow.actor = Reference::object(actor);
+    } else {
+        app_state
+            .actor_resolver
+            .resolve_reference(&mut follow.actor)
+            .await
+            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    }
     let accept_id = accept_id_for_follow(&app_state.local_actor.id, &follow.id)?;
     let input = Input::received_follow(follow, accept_id);
 

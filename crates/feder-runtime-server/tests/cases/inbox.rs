@@ -19,6 +19,7 @@ use axum::{
     http::{HeaderMap, Request, StatusCode, Uri, header::CONTENT_TYPE},
     routing::{get, post},
 };
+use feder_core::http_signatures::{create_sha256_digest_header, sign_draft_cavage};
 use feder_runtime_server::{
     app::router_with_state,
     config::{InboxAuthPolicy, StorageConfig},
@@ -28,8 +29,8 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crate::common::{
-    RecordedRequest, spawn_inbox_server, temporary_database_path, test_app_state, test_config,
-    test_router,
+    RecordedRequest, fixture_actor_key_pair, spawn_inbox_server, temporary_database_path,
+    test_app_state, test_config, test_router,
 };
 
 fn follow_body() -> Vec<u8> {
@@ -85,7 +86,15 @@ async fn spawn_actor_server() -> (
         "inbox": inbox,
         "outbox": format!("http://{address}/users/bob/outbox"),
         "preferredUsername": "bob",
-        "endpoints": { "sharedInbox": inbox }
+        "endpoints": { "sharedInbox": inbox },
+        "publicKey": {
+            "id": format!("{actor_id}#main-key"),
+            "type": "CryptographicKey",
+            "owner": actor_id,
+            "publicKeyPem": fixture_actor_key_pair()
+                .expect("load actor key fixture")
+                .public_key_pem()
+        }
     });
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     let app = Router::new()
@@ -130,6 +139,47 @@ async fn post_inbox(
             .uri(uri)
             .header(CONTENT_TYPE, content_type)
             .body(body.into())
+            .expect("valid request"),
+    )
+    .await
+    .expect("response")
+}
+
+async fn post_signed_inbox(
+    app: Router,
+    uri: &str,
+    actor_id: &str,
+    signed_body: &[u8],
+    delivered_body: impl Into<Body>,
+) -> axum::response::Response {
+    let date = httpdate::fmt_http_date(std::time::SystemTime::now());
+    let digest = create_sha256_digest_header(signed_body);
+    let host = "local.example";
+    let headers = [
+        ("content-type", "application/activity+json"),
+        ("date", date.as_str()),
+        ("digest", digest.as_str()),
+        ("host", host),
+    ];
+    let signature = sign_draft_cavage(
+        &fixture_actor_key_pair().expect("load actor key fixture"),
+        &format!("{actor_id}#main-key"),
+        "POST",
+        uri,
+        &headers,
+    )
+    .expect("sign inbox request");
+
+    app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(CONTENT_TYPE, "application/activity+json")
+            .header("date", date)
+            .header("digest", digest)
+            .header("host", host)
+            .header("signature", signature)
+            .body(delivered_body.into())
             .expect("valid request"),
     )
     .await
@@ -218,6 +268,96 @@ async fn resolves_id_only_follower_and_sends_accept() {
         serde_json::from_slice(&request.body).expect("valid sent activity");
     assert_eq!(activity["type"], "Accept");
     assert_eq!(activity["object"]["actor"]["id"], actor_id);
+    actor_server.abort();
+}
+
+#[tokio::test]
+async fn verifies_signed_id_only_follow() {
+    let (actor_id, mut requests, actor_server) = spawn_actor_server().await;
+    let mut config = test_config();
+    config.inbox_auth_policy = InboxAuthPolicy::RequireSigned;
+    let state = test_app_state(config).expect("build app state");
+    let body = id_only_follow_body(&actor_id);
+    let response = post_signed_inbox(
+        router_with_state(state.clone()),
+        "/users/alice/inbox",
+        &actor_id,
+        &body,
+        body.clone(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        state
+            .core
+            .lock()
+            .expect("core lock")
+            .state()
+            .followers()
+            .len(),
+        1
+    );
+    requests.recv().await.expect("receive Accept request");
+    actor_server.abort();
+}
+
+#[tokio::test]
+async fn signed_follow_rejects_tampered_body() {
+    let (actor_id, _requests, actor_server) = spawn_actor_server().await;
+    let mut config = test_config();
+    config.inbox_auth_policy = InboxAuthPolicy::RequireSigned;
+    let state = test_app_state(config).expect("build app state");
+    let signed_body = id_only_follow_body(&actor_id);
+    let delivered_body = id_only_follow_body("https://attacker.example/users/mallory");
+    let response = post_signed_inbox(
+        router_with_state(state.clone()),
+        "/users/alice/inbox",
+        &actor_id,
+        &signed_body,
+        delivered_body,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        state
+            .core
+            .lock()
+            .expect("core lock")
+            .state()
+            .followers()
+            .is_empty()
+    );
+    actor_server.abort();
+}
+
+#[tokio::test]
+async fn signed_follow_rejects_actor_different_from_key_owner() {
+    let (actor_id, _requests, actor_server) = spawn_actor_server().await;
+    let mut config = test_config();
+    config.inbox_auth_policy = InboxAuthPolicy::RequireSigned;
+    let state = test_app_state(config).expect("build app state");
+    let body = id_only_follow_body("https://attacker.example/users/mallory");
+    let response = post_signed_inbox(
+        router_with_state(state.clone()),
+        "/users/alice/inbox",
+        &actor_id,
+        &body,
+        body.clone(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        state
+            .core
+            .lock()
+            .expect("core lock")
+            .state()
+            .followers()
+            .is_empty()
+    );
     actor_server.abort();
 }
 

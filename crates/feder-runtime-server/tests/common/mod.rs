@@ -153,7 +153,7 @@ pub fn temporary_database_path(prefix: &str) -> std::path::PathBuf {
     ))
 }
 
-fn fixture_actor_key_pair() -> Result<ActorKeyPair, feder_core::http_signatures::KeyError> {
+pub fn fixture_actor_key_pair() -> Result<ActorKeyPair, feder_core::http_signatures::KeyError> {
     ActorKeyPair::from_pem(
         include_str!("../fixtures/rsa-private-key.pem").to_string(),
         include_str!("../fixtures/rsa-public-key.pem").to_string(),

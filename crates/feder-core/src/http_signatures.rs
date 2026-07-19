@@ -6,11 +6,11 @@ use core::fmt;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rsa::{
     RsaPrivateKey, RsaPublicKey,
-    pkcs1v15::SigningKey,
+    pkcs1v15::{Signature, SigningKey, VerifyingKey},
     pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding},
     rand_core::CryptoRngCore,
     sha2::{Digest, Sha256},
-    signature::{SignatureEncoding, Signer},
+    signature::{SignatureEncoding, Signer, Verifier},
 };
 use zeroize::Zeroizing;
 
@@ -144,6 +144,32 @@ pub fn sign_draft_cavage(
     ))
 }
 
+/// Verifies a draft-Cavage RSA-SHA256 signature over a prepared request.
+///
+/// `headers` must contain the signed HTTP headers in their declared order,
+/// excluding the `(request-target)` pseudo-header.
+pub fn verify_draft_cavage(
+    public_key_pem: &str,
+    method: &str,
+    request_target: &str,
+    headers: &[(&str, &str)],
+    signature: &str,
+) -> Result<(), HttpSignatureVerificationError> {
+    let signature_base = draft_cavage_signature_base(method, request_target, headers);
+    let public_key = RsaPublicKey::from_public_key_pem(public_key_pem)
+        .map_err(HttpSignatureVerificationError::InvalidPublicKey)?;
+    let signature = STANDARD
+        .decode(signature)
+        .map_err(HttpSignatureVerificationError::InvalidSignatureEncoding)?;
+    let signature = Signature::try_from(signature.as_slice())
+        .map_err(HttpSignatureVerificationError::InvalidSignature)?;
+    let verifying_key = VerifyingKey::<Sha256>::new(public_key);
+
+    verifying_key
+        .verify(signature_base.as_bytes(), &signature)
+        .map_err(HttpSignatureVerificationError::Verification)
+}
+
 fn draft_cavage_signature_base(
     method: &str,
     request_target: &str,
@@ -177,6 +203,30 @@ impl fmt::Display for HttpSignatureError {
 }
 
 impl core::error::Error for HttpSignatureError {}
+
+/// Errors produced while verifying an HTTP signature.
+#[derive(Debug)]
+pub enum HttpSignatureVerificationError {
+    InvalidPublicKey(rsa::pkcs8::spki::Error),
+    InvalidSignatureEncoding(base64::DecodeError),
+    InvalidSignature(rsa::signature::Error),
+    Verification(rsa::signature::Error),
+}
+
+impl fmt::Display for HttpSignatureVerificationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPublicKey(_) => formatter.write_str("invalid RSA public key PEM"),
+            Self::InvalidSignatureEncoding(_) => {
+                formatter.write_str("invalid base64 signature encoding")
+            }
+            Self::InvalidSignature(_) => formatter.write_str("invalid RSA signature"),
+            Self::Verification(_) => formatter.write_str("HTTP signature verification failed"),
+        }
+    }
+}
+
+impl core::error::Error for HttpSignatureVerificationError {}
 
 #[cfg(test)]
 mod tests {
@@ -275,6 +325,40 @@ mod tests {
         verifying_key
             .verify(signature_base.as_bytes(), &signature)
             .expect("verify signature");
+    }
+
+    #[test]
+    fn draft_cavage_signature_verifies_and_rejects_changed_headers() {
+        let pair = ActorKeyPair::from_pem(PRIVATE_KEY_PEM.to_string(), PUBLIC_KEY_PEM.to_string())
+            .expect("load actor key pair fixture");
+        let headers = [
+            ("date", "Tue, 05 Mar 2024 07:49:44 GMT"),
+            (
+                "digest",
+                "SHA-256=MV9b23bQeMQ7isAGTkoBZGErH853yGk0W/yUx1iU7dM=",
+            ),
+            ("host", "example.com"),
+        ];
+        let signature_header =
+            sign_draft_cavage(&pair, "https://example.com/key", "POST", "/inbox", &headers)
+                .expect("sign request");
+        let signature = signature_header
+            .rsplit_once("signature=\"")
+            .and_then(|(_, signature)| signature.strip_suffix('"'))
+            .expect("signature parameter");
+
+        verify_draft_cavage(pair.public_key_pem(), "POST", "/inbox", &headers, signature)
+            .expect("verify request");
+        assert!(
+            verify_draft_cavage(
+                pair.public_key_pem(),
+                "POST",
+                "/other-inbox",
+                &headers,
+                signature,
+            )
+            .is_err()
+        );
     }
 
     fn signature_header_prefix(headers: &[(&str, &str)]) -> String {
