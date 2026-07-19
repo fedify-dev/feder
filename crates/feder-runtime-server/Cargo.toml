@@ -13,6 +13,7 @@ feder-core = { workspace = true, features = ["http-signatures"] }
 feder-vocab.workspace = true
 iri-string.workspace = true
 axum = "0.8"
+httpdate = "1"
 serde.workspace = true
 thiserror = "2"
 serde_json.workspace = true

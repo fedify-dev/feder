@@ -12,8 +12,9 @@ handle hosts.
 ActivityPub inbox handling for supported Follow activities is included. The
 runtime can use in-memory storage for tests and examples, or file-backed SQLite
 storage for persisted follower state. Outgoing `SendActivity` actions are sent
-synchronously to recipient inboxes as ActivityPub JSON. HTTP signature creation
-and verification are intentionally left to later issues.
+synchronously to recipient inboxes as ActivityPub JSON signed with the actor's
+draft-Cavage RSA key. HTTP signature verification is intentionally left to a
+later issue.
 
 
 Example

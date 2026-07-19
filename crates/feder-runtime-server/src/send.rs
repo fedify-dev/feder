@@ -13,24 +13,44 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use feder_core::{Action, Activity, SendActivity};
-use reqwest::{Client, StatusCode, redirect::Policy};
+use std::{sync::Arc, time::SystemTime};
 
+use feder_core::{
+    Action, Activity, SendActivity,
+    http_signatures::{
+        ActorKeyPair, HttpSignatureError, create_sha256_digest_header, sign_draft_cavage,
+    },
+};
+use reqwest::{
+    Client, StatusCode, Url,
+    header::{CONTENT_TYPE, DATE, HOST},
+    redirect::Policy,
+};
+
+/// Sends core `SendActivity` actions as signed ActivityPub HTTP requests.
 #[derive(Clone, Debug)]
 pub struct ActivitySender {
     client: Client,
+    key_pair: Arc<ActorKeyPair>,
+    key_id: String,
 }
 
 impl ActivitySender {
-    pub fn new() -> Result<Self, SendError> {
+    /// Creates an activity sender for one actor identity.
+    pub fn new(key_pair: Arc<ActorKeyPair>, key_id: String) -> Result<Self, SendError> {
         let client = Client::builder()
             .redirect(Policy::none())
             .build()
             .map_err(SendError::BuildClient)?;
 
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            key_pair,
+            key_id,
+        })
     }
 
+    /// Attempts every send action and returns the first error encountered.
     pub async fn send_actions(&self, actions: &[Action]) -> Result<(), SendError> {
         let mut first_error = None;
 
@@ -53,11 +73,38 @@ impl ActivitySender {
             _ => return Err(SendError::UnsupportedActivity),
         }
         .map_err(SendError::Serialize)?;
+        let url = Url::parse(send.inbox.as_str())
+            .map_err(|_| SendError::InvalidInbox(send.inbox.to_string()))?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(SendError::InvalidInbox(send.inbox.to_string()));
+        }
+        let mut host = url
+            .host()
+            .ok_or_else(|| SendError::InvalidInbox(send.inbox.to_string()))?
+            .to_string();
+        if let Some(port) = url.port() {
+            host = format!("{host}:{port}");
+        }
+        let date = httpdate::fmt_http_date(SystemTime::now());
+        let digest = create_sha256_digest_header(&body);
+        let headers = [
+            ("content-type", "application/activity+json"),
+            ("date", date.as_str()),
+            ("digest", digest.as_str()),
+            ("host", host.as_str()),
+        ];
+        let signature =
+            sign_draft_cavage(&self.key_pair, &self.key_id, "POST", url.path(), &headers)
+                .map_err(SendError::Sign)?;
 
         let response = self
             .client
-            .post(send.inbox.as_str())
-            .header(reqwest::header::CONTENT_TYPE, "application/activity+json")
+            .post(url)
+            .header(CONTENT_TYPE, "application/activity+json")
+            .header(DATE, date)
+            .header("Digest", digest)
+            .header(HOST, host)
+            .header("Signature", signature)
             .body(body)
             .send()
             .await
@@ -81,6 +128,12 @@ pub enum SendError {
 
     #[error("failed to serialize activity")]
     Serialize(#[source] serde_json::Error),
+
+    #[error("invalid recipient inbox: {0}")]
+    InvalidInbox(String),
+
+    #[error("failed to sign activity request")]
+    Sign(#[source] HttpSignatureError),
 
     #[error("failed to send activity")]
     Request(#[source] reqwest::Error),

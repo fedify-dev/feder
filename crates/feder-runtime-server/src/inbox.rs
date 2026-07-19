@@ -124,7 +124,9 @@ pub async fn inbox(
         .map_err(|error| match error {
             SendError::Request(_) | SendError::UnsuccessfulStatus { .. } => StatusCode::BAD_GATEWAY,
             SendError::BuildClient(_)
+            | SendError::InvalidInbox(_)
             | SendError::Serialize(_)
+            | SendError::Sign(_)
             | SendError::UnsupportedActivity => StatusCode::INTERNAL_SERVER_ERROR,
         })?;
 

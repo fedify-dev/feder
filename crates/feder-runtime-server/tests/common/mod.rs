@@ -109,17 +109,18 @@ pub fn test_app_state(config: RuntimeConfig) -> Result<AppState, Error> {
         IriFragmentStr::new("main-key").expect("main-key is a valid IRI fragment"),
     ));
     actor.set_public_key(Reference::object(CryptographicKey::new(
-        key_id,
+        key_id.clone(),
         actor.id.clone(),
         actor_key_pair.public_key_pem().to_string(),
     )));
     let core = FederCore::new(FederConfig::new(actor.clone()));
-    let activity_sender = ActivitySender::new()?;
+    let actor_key_pair = Arc::new(actor_key_pair);
+    let activity_sender = ActivitySender::new(actor_key_pair.clone(), key_id.to_string())?;
 
     Ok(AppState {
         core: Arc::new(Mutex::new(core)),
         store: Arc::new(Mutex::new(store)),
-        actor_key_pair: Arc::new(actor_key_pair),
+        actor_key_pair,
         activity_sender,
         local_actor: actor,
         username: config.username,
@@ -148,4 +149,12 @@ fn fixture_actor_key_pair() -> Result<ActorKeyPair, feder_core::http_signatures:
         include_str!("../fixtures/rsa-private-key.pem").to_string(),
         include_str!("../fixtures/rsa-public-key.pem").to_string(),
     )
+}
+
+pub fn test_activity_sender() -> ActivitySender {
+    ActivitySender::new(
+        Arc::new(fixture_actor_key_pair().expect("load actor key pair fixture")),
+        "https://local.example/users/alice#main-key".to_string(),
+    )
+    .expect("build activity sender")
 }

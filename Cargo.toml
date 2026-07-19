@@ -18,13 +18,14 @@ repository = "https://github.com/fedify-dev/feder"
 [workspace.dependencies]
 # Keep workspace crate versions in sync with [workspace.package].version.
 # Use `mise run bump-execute <version>` instead of editing these by hand.
+base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 feder-core = { version = "0.1.0", path = "crates/feder-core" }
 feder-runtime-server = { version = "0.1.0", path = "crates/feder-runtime-server" }
 feder-vocab = { version = "0.1.0", path = "crates/feder-vocab" }
 iri-string = { version = "0.7.12", default-features = false, features = ["alloc", "serde"] }
 rand_chacha = { version = "0.3.1", default-features = false }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
-rsa = { version = "0.9.10", default-features = false, features = ["pem", "u64_digit"] }
+rsa = { version = "0.9.10", default-features = false, features = ["pem", "sha2", "u64_digit"] }
 serde = { version = "1.0.219", default-features = false, features = ["alloc", "derive"] }
 serde_json = "1.0.140"
 tower = { version = "0.5", features = ["util"]}

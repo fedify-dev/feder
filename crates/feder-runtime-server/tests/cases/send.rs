@@ -15,10 +15,9 @@
 
 use axum::http::StatusCode;
 use feder_core::{Action, Activity, SendActivity};
-use feder_runtime_server::send::ActivitySender;
 use feder_vocab::{Create, Note, Reference};
 
-use crate::common::spawn_inbox_server;
+use crate::common::{spawn_inbox_server, test_activity_sender};
 
 fn create_note_send_action(inbox: &str) -> Action {
     let actor_id = "https://local.example/users/alice"
@@ -48,13 +47,28 @@ async fn sends_create_note_action() {
     let (inbox, mut requests, inbox_server) = spawn_inbox_server(StatusCode::ACCEPTED).await;
     let actions = [create_note_send_action(&inbox)];
 
-    ActivitySender::new()
-        .expect("build activity sender")
+    test_activity_sender()
         .send_actions(&actions)
         .await
         .expect("send Create activity");
 
     let request = requests.recv().await.expect("receive Create request");
+    assert_eq!(
+        request.headers["host"],
+        inbox
+            .strip_prefix("http://")
+            .and_then(|value| value.strip_suffix("/inbox"))
+            .expect("inbox authority")
+    );
+    assert!(httpdate::parse_http_date(request.headers["date"].to_str().unwrap()).is_ok());
+    assert_eq!(
+        request.headers["digest"],
+        feder_core::http_signatures::create_sha256_digest_header(&request.body)
+    );
+    let signature = request.headers["signature"].to_str().unwrap();
+    assert!(signature.starts_with(
+        "keyId=\"https://local.example/users/alice#main-key\",algorithm=\"rsa-sha256\",headers=\"(request-target) content-type date digest host\",signature=\""
+    ));
     let activity: serde_json::Value =
         serde_json::from_slice(&request.body).expect("valid sent activity");
     assert_eq!(activity["type"], "Create");
@@ -74,10 +88,7 @@ async fn attempts_later_sends_after_failure() {
         create_note_send_action(&successful_inbox),
     ];
 
-    let result = ActivitySender::new()
-        .expect("build activity sender")
-        .send_actions(&actions)
-        .await;
+    let result = test_activity_sender().send_actions(&actions).await;
 
     assert!(result.is_err());
     failed_requests

@@ -66,17 +66,18 @@ impl AppState {
             IriFragmentStr::new("main-key").expect("main-key is a valid IRI fragment"),
         ));
         actor.set_public_key(Reference::object(CryptographicKey::new(
-            key_id,
+            key_id.clone(),
             actor.id.clone(),
             actor_key_pair.public_key_pem().to_string(),
         )));
         let core = FederCore::new(FederConfig::new(actor.clone()));
-        let activity_sender = ActivitySender::new()?;
+        let actor_key_pair = Arc::new(actor_key_pair);
+        let activity_sender = ActivitySender::new(actor_key_pair.clone(), key_id.to_string())?;
 
         Ok(Self {
             core: Arc::new(Mutex::new(core)),
             store: Arc::new(Mutex::new(store)),
-            actor_key_pair: Arc::new(actor_key_pair),
+            actor_key_pair,
             activity_sender,
             local_actor: actor,
             username: config.username,
