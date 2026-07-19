@@ -181,6 +181,7 @@ dependencies = [
  "axum",
  "feder-core",
  "feder-vocab",
+ "iri-string",
  "percent-encoding",
  "rand_core",
  "rusqlite",

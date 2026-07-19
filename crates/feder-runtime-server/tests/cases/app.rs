@@ -18,6 +18,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use feder_runtime_server::{AppState, config::StorageConfig, storage::RuntimeStore};
+use feder_vocab::Reference;
 use tower::ServiceExt;
 
 use crate::common::{temporary_database_path, test_config, test_router};
@@ -46,6 +47,20 @@ fn startup_generates_then_reuses_persisted_actor_key_pair() {
     config.storage = StorageConfig::Sqlite { path: path.clone() };
     let first = AppState::from_config(config).expect("build first app state");
     let expected_public_key = first.actor_key_pair.public_key_pem().to_string();
+    let Reference::Object(published_key) = first
+        .local_actor
+        .public_key
+        .as_ref()
+        .expect("actor publishes public key")
+    else {
+        panic!("actor public key should be embedded");
+    };
+    assert_eq!(
+        published_key.id.as_str(),
+        "http://127.0.0.1:3000/users/alice#main-key"
+    );
+    assert_eq!(published_key.owner, first.local_actor.id);
+    assert_eq!(published_key.public_key_pem, expected_public_key);
     let stored = first
         .store
         .lock()

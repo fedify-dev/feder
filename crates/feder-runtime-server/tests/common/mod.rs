@@ -23,7 +23,8 @@ use feder_runtime_server::{
     config::{InboxAuthPolicy, RuntimeConfig, StorageConfig},
     storage::{RuntimeStore, SqliteStore},
 };
-use feder_vocab::Actor;
+use feder_vocab::{Actor, CryptographicKey, Reference};
+use iri_string::types::IriFragmentStr;
 
 pub fn test_config() -> RuntimeConfig {
     RuntimeConfig {
@@ -49,7 +50,6 @@ pub fn test_app_state(config: RuntimeConfig) -> Result<AppState, Error> {
     actor.preferred_username = Some(config.username.clone());
     actor.name = Some(config.username.clone());
 
-    let core = FederCore::new(FederConfig::new(actor.clone()));
     let mut store = match &config.storage {
         StorageConfig::InMemory => SqliteStore::open_in_memory()?,
         StorageConfig::Sqlite { path } => SqliteStore::open(path)?,
@@ -62,6 +62,16 @@ pub fn test_app_state(config: RuntimeConfig) -> Result<AppState, Error> {
             key_pair
         }
     };
+    let mut key_id = actor.id.clone();
+    key_id.set_fragment(Some(
+        IriFragmentStr::new("main-key").expect("main-key is a valid IRI fragment"),
+    ));
+    actor.set_public_key(Reference::object(CryptographicKey::new(
+        key_id,
+        actor.id.clone(),
+        actor_key_pair.public_key_pem().to_string(),
+    )));
+    let core = FederCore::new(FederConfig::new(actor.clone()));
 
     Ok(AppState {
         core: Arc::new(Mutex::new(core)),

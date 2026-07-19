@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 feder-core = { workspace = true, features = ["http-signatures"] }
 feder-vocab.workspace = true
+iri-string.workspace = true
 axum = "0.8"
 serde.workspace = true
 thiserror = "2"

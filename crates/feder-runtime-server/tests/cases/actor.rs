@@ -47,13 +47,28 @@ async fn returns_local_actor() {
         .expect("read response body");
     let json: Value = serde_json::from_slice(&body).expect("valid json");
 
-    assert_eq!(json["@context"], "https://www.w3.org/ns/activitystreams");
+    assert_eq!(
+        json["@context"],
+        serde_json::json!([
+            "https://www.w3.org/ns/activitystreams",
+            "https://w3id.org/security/v1"
+        ])
+    );
     assert_eq!(json["type"], "Person");
     assert_eq!(json["id"], "http://127.0.0.1:3000/users/alice");
     assert_eq!(json["inbox"], "http://127.0.0.1:3000/users/alice/inbox");
     assert_eq!(json["outbox"], "http://127.0.0.1:3000/users/alice/outbox");
     assert_eq!(json["preferredUsername"], "alice");
     assert_eq!(json["name"], "alice");
+    assert_eq!(
+        json["publicKey"],
+        serde_json::json!({
+            "id": "http://127.0.0.1:3000/users/alice#main-key",
+            "type": "CryptographicKey",
+            "owner": "http://127.0.0.1:3000/users/alice",
+            "publicKeyPem": include_str!("../fixtures/rsa-public-key.pem"),
+        })
+    );
 }
 
 #[tokio::test]

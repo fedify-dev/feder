@@ -26,7 +26,8 @@ use feder_core::{
     FederConfig, FederCore,
     http_signatures::{ActorKeyPair, generate_actor_key_pair},
 };
-use feder_vocab::Actor;
+use feder_vocab::{Actor, CryptographicKey, Reference};
+use iri_string::types::IriFragmentStr;
 use rand_core::OsRng;
 
 #[derive(Clone)]
@@ -46,7 +47,6 @@ impl AppState {
         actor.preferred_username = Some(config.username.clone());
         actor.name = Some(config.username.clone());
 
-        let core = FederCore::new(FederConfig::new(actor.clone()));
         let mut store = match &config.storage {
             StorageConfig::InMemory => SqliteStore::open_in_memory()?,
             StorageConfig::Sqlite { path } => SqliteStore::open(path)?,
@@ -59,6 +59,16 @@ impl AppState {
                 key_pair
             }
         };
+        let mut key_id = actor.id.clone();
+        key_id.set_fragment(Some(
+            IriFragmentStr::new("main-key").expect("main-key is a valid IRI fragment"),
+        ));
+        actor.set_public_key(Reference::object(CryptographicKey::new(
+            key_id,
+            actor.id.clone(),
+            actor_key_pair.public_key_pem().to_string(),
+        )));
+        let core = FederCore::new(FederConfig::new(actor.clone()));
 
         Ok(Self {
             core: Arc::new(Mutex::new(core)),
