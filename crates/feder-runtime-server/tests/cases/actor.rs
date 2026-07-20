@@ -30,6 +30,7 @@ async fn returns_local_actor() {
         .oneshot(
             Request::builder()
                 .uri("/users/alice")
+                .header(header::ACCEPT, "application/activity+json")
                 .body(Body::empty())
                 .expect("valid request"),
         )
@@ -41,6 +42,7 @@ async fn returns_local_actor() {
         response.headers().get(header::CONTENT_TYPE).unwrap(),
         "application/activity+json"
     );
+    assert_eq!(response.headers().get(header::VARY).unwrap(), "Accept");
 
     let body = to_bytes(response.into_body(), 2048)
         .await
@@ -73,6 +75,39 @@ async fn returns_local_actor() {
             "publicKeyPem": include_str!("../fixtures/rsa-public-key.pem"),
         })
     );
+}
+
+#[tokio::test]
+async fn rejects_actor_request_when_html_is_preferred() {
+    let response = test_router(test_config())
+        .expect("build router")
+        .oneshot(
+            Request::builder()
+                .uri("/users/alice")
+                .header(header::ACCEPT, "text/html, application/activity+json;q=0.8")
+                .body(Body::empty())
+                .expect("valid request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+}
+
+#[tokio::test]
+async fn rejects_actor_request_without_activitypub_accept() {
+    let response = test_router(test_config())
+        .expect("build router")
+        .oneshot(
+            Request::builder()
+                .uri("/users/alice")
+                .body(Body::empty())
+                .expect("valid request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
 }
 
 #[tokio::test]

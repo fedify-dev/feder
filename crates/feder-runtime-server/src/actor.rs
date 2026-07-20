@@ -16,7 +16,7 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use feder_vocab::{Actor, ActorType, CryptographicKey, Endpoints, Iri, Reference};
@@ -26,7 +26,7 @@ use reqwest::{
 };
 use serde::Deserialize;
 
-use crate::{app::AppState, config::OutboundAddressPolicy, url};
+use crate::{app::AppState, config::OutboundAddressPolicy, negotiation::accepts_activitypub, url};
 
 const MAX_ACTOR_BODY_SIZE: usize = 1_048_576;
 const ACTIVITYPUB_ACCEPT: &str = "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"";
@@ -34,14 +34,21 @@ const ACTIVITYPUB_ACCEPT: &str = "application/activity+json, application/ld+json
 pub async fn actor(
     State(app_state): State<AppState>,
     Path(username): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
     if username != app_state.username {
         return Err(StatusCode::NOT_FOUND);
     }
+    if !accepts_activitypub(&headers) {
+        return Err(StatusCode::NOT_ACCEPTABLE);
+    }
     let local_actor = app_state.local_actor.clone();
 
     Ok((
-        [(header::CONTENT_TYPE, "application/activity+json")],
+        [
+            (header::CONTENT_TYPE, "application/activity+json"),
+            (header::VARY, "Accept"),
+        ],
         Json(local_actor),
     )
         .into_response())

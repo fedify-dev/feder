@@ -313,6 +313,7 @@ dependencies = [
  "httpdate",
  "ipnet",
  "iri-string",
+ "mime",
  "percent-encoding",
  "rand_core 0.6.4",
  "reqwest",

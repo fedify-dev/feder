@@ -16,20 +16,24 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use feder_vocab::OrderedCollection;
 
-use crate::{app::AppState, storage::RuntimeStore};
+use crate::{app::AppState, negotiation::accepts_activitypub, storage::RuntimeStore};
 
 /// Return the local actor's followers as a one-shot ordered collection.
 pub async fn followers(
     State(app_state): State<AppState>,
     Path(username): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
     if username != app_state.username {
         return Err(StatusCode::NOT_FOUND);
+    }
+    if !accepts_activitypub(&headers) {
+        return Err(StatusCode::NOT_ACCEPTABLE);
     }
 
     let followers = app_state

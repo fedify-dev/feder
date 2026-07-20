@@ -33,6 +33,7 @@ async fn get_followers(app: axum::Router, username: &str) -> axum::response::Res
     app.oneshot(
         Request::builder()
             .uri(format!("/users/{username}/followers"))
+            .header(header::ACCEPT, "application/activity+json")
             .body(Body::empty())
             .expect("valid request"),
     )
@@ -130,4 +131,37 @@ async fn rejects_unknown_username() {
         get_followers(test_router(test_config()).expect("build router"), "unknown").await;
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn rejects_followers_request_when_html_is_preferred() {
+    let response = test_router(test_config())
+        .expect("build router")
+        .oneshot(
+            Request::builder()
+                .uri("/users/alice/followers")
+                .header(header::ACCEPT, "text/html, application/activity+json;q=0.8")
+                .body(Body::empty())
+                .expect("valid request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+}
+
+#[tokio::test]
+async fn rejects_followers_request_without_activitypub_accept() {
+    let response = test_router(test_config())
+        .expect("build router")
+        .oneshot(
+            Request::builder()
+                .uri("/users/alice/followers")
+                .body(Body::empty())
+                .expect("valid request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
 }
