@@ -40,7 +40,7 @@ pub async fn actor(
         return Err(StatusCode::NOT_FOUND);
     }
     if !accepts_activitypub(&headers) {
-        return Err(StatusCode::NOT_ACCEPTABLE);
+        return Ok(([(header::VARY, "Accept")], StatusCode::NOT_ACCEPTABLE).into_response());
     }
     let local_actor = app_state.local_actor.clone();
 

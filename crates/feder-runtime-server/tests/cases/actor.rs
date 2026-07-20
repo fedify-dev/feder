@@ -92,6 +92,7 @@ async fn rejects_actor_request_when_html_is_preferred() {
         .expect("response");
 
     assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+    assert_eq!(response.headers().get(header::VARY).unwrap(), "Accept");
 }
 
 #[tokio::test]
@@ -108,6 +109,7 @@ async fn rejects_actor_request_without_activitypub_accept() {
         .expect("response");
 
     assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+    assert_eq!(response.headers().get(header::VARY).unwrap(), "Accept");
 }
 
 #[tokio::test]
