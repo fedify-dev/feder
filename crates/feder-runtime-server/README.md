@@ -6,8 +6,8 @@ systems.
 
 This crate builds an Axum router from caller-provided runtime configuration.
 It provides a health check endpoint, WebFinger discovery, and a local actor
-route. The caller chooses concrete bind addresses, actor IRIs, usernames, and
-handle hosts.
+route with its followers collection. The caller chooses concrete bind
+addresses, actor IRIs, usernames, and handle hosts.
 
 ActivityPub inbox handling for Follow and embedded Undo(Follow) activities is
 included. The runtime can use in-memory storage for tests and examples, or

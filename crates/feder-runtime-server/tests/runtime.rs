@@ -19,6 +19,8 @@ mod common;
 mod actor;
 #[path = "cases/app.rs"]
 mod app;
+#[path = "cases/followers.rs"]
+mod followers;
 #[path = "cases/inbox.rs"]
 mod inbox;
 #[path = "cases/send.rs"]

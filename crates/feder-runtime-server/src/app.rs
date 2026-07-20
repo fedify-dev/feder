@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use crate::Error;
 use crate::actor::ActorResolver;
 use crate::config::{InboxAuthPolicy, RuntimeConfig, StorageConfig};
+use crate::followers::followers;
 use crate::send::ActivitySender;
 use crate::storage::{RuntimeStore, SqliteStore};
 use crate::webfinger::webfinger;
@@ -111,6 +112,7 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/.well-known/webfinger", get(webfinger))
         .route("/users/{username}", get(actor))
+        .route("/users/{username}/followers", get(followers))
         .route("/users/{username}/inbox", post(inbox))
         .layer(DefaultBodyLimit::max(1_048_576))
         .with_state(state)

@@ -17,6 +17,7 @@ pub mod actor;
 pub mod app;
 pub mod config;
 pub mod error;
+pub mod followers;
 pub mod inbox;
 pub mod send;
 pub mod storage;
