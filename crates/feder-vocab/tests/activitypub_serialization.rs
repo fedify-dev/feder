@@ -14,8 +14,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use feder_vocab::{
-    ACTIVITYSTREAMS_CONTEXT, Accept, Actor, Create, CryptographicKey, Follow, Iri, Note, Reference,
-    References, SECURITY_CONTEXT, Undo,
+    ACTIVITYSTREAMS_CONTEXT, Accept, Actor, Create, CryptographicKey, Follow, Iri, Note,
+    OrderedCollection, Reference, References, SECURITY_CONTEXT, Undo,
 };
 use serde_json::{Value, json};
 
@@ -142,6 +142,32 @@ fn undo_activity_can_embed_follow_activity() {
             "id": "https://remote.example/activities/undo/1",
             "actor": "https://remote.example/users/bob",
             "object": incoming_follow_json()
+        })
+    );
+}
+
+#[test]
+fn ordered_collection_serializes_actor_iris() {
+    let collection = OrderedCollection::new(
+        iri("https://example.com/users/alice/followers"),
+        2,
+        vec![
+            iri("https://remote.example/users/bob"),
+            iri("https://another.example/users/carol"),
+        ],
+    );
+
+    assert_eq!(
+        serialize_to_value(collection),
+        json!({
+            "@context": ACTIVITYSTREAMS_CONTEXT,
+            "type": "OrderedCollection",
+            "id": "https://example.com/users/alice/followers",
+            "totalItems": 2,
+            "orderedItems": [
+                "https://remote.example/users/bob",
+                "https://another.example/users/carol"
+            ]
         })
     );
 }

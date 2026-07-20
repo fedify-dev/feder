@@ -188,6 +188,7 @@ struct ActorDocument {
     id: Iri,
     inbox: Iri,
     outbox: Iri,
+    followers: Option<Iri>,
     #[serde(rename = "preferredUsername")]
     preferred_username: Option<String>,
     name: Option<String>,
@@ -204,6 +205,7 @@ impl ActorDocument {
             id: self.id,
             inbox: self.inbox,
             outbox: self.outbox,
+            followers: self.followers,
             preferred_username: self.preferred_username,
             name: self.name,
             endpoints: self.endpoints,

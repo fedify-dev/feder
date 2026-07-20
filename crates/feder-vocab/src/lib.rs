@@ -175,6 +175,7 @@ activitystreams_type!(FollowType, Follow);
 activitystreams_type!(AcceptType, Accept);
 activitystreams_type!(UndoType, Undo);
 activitystreams_type!(CreateType, Create);
+activitystreams_type!(OrderedCollectionType, OrderedCollection);
 
 /// A JSON-LD context represented by one or more IRIs.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -263,6 +264,8 @@ pub struct Actor {
     pub id: Iri,
     pub inbox: Iri,
     pub outbox: Iri,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub followers: Option<Iri>,
     #[serde(rename = "preferredUsername", skip_serializing_if = "Option::is_none")]
     pub preferred_username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -291,6 +294,7 @@ impl Actor {
             id,
             inbox,
             outbox,
+            followers: None,
             preferred_username: None,
             name: None,
             endpoints: None,
@@ -461,6 +465,37 @@ impl<T> Create<T> {
             id,
             actor,
             object,
+        }
+    }
+}
+
+/// A minimal ActivityStreams ordered collection.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OrderedCollection<T> {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: OrderedCollectionType,
+    pub id: Iri,
+    #[serde(rename = "totalItems")]
+    pub total_items: u64,
+    #[serde(rename = "orderedItems")]
+    pub ordered_items: Vec<T>,
+}
+
+impl<T> OrderedCollection<T> {
+    #[must_use]
+    pub fn new(id: Iri, total_items: u64, ordered_items: Vec<T>) -> Self {
+        Self {
+            context: Some(
+                ACTIVITYSTREAMS_CONTEXT
+                    .parse()
+                    .expect("valid ActivityStreams IRI"),
+            ),
+            kind: OrderedCollectionType::default(),
+            id,
+            total_items,
+            ordered_items,
         }
     }
 }

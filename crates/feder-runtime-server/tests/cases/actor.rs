@@ -58,6 +58,10 @@ async fn returns_local_actor() {
     assert_eq!(json["id"], "http://127.0.0.1:3000/users/alice");
     assert_eq!(json["inbox"], "http://127.0.0.1:3000/users/alice/inbox");
     assert_eq!(json["outbox"], "http://127.0.0.1:3000/users/alice/outbox");
+    assert_eq!(
+        json["followers"],
+        "http://127.0.0.1:3000/users/alice/followers"
+    );
     assert_eq!(json["preferredUsername"], "alice");
     assert_eq!(json["name"], "alice");
     assert_eq!(

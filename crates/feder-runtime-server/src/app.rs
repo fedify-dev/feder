@@ -50,6 +50,11 @@ impl AppState {
         let mut actor = Actor::person(config.actor_id, config.inbox, config.outbox);
         actor.preferred_username = Some(config.username.clone());
         actor.name = Some(config.username.clone());
+        actor.followers = Some(
+            format!("{}/followers", actor.id.as_str().trim_end_matches('/'))
+                .parse()
+                .expect("appending a followers path preserves a valid actor IRI"),
+        );
 
         let mut store = match &config.storage {
             StorageConfig::InMemory => SqliteStore::open_in_memory()?,
