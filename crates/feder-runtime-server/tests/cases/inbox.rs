@@ -65,6 +65,22 @@ fn id_only_follow_body(actor_id: &str) -> Vec<u8> {
     .expect("serialize ID-only follow")
 }
 
+fn undo_follow_body(actor_id: &str, follow_actor_id: &str) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "type": "Undo",
+        "id": format!("{actor_id}/undo/1"),
+        "actor": actor_id,
+        "object": {
+            "type": "Follow",
+            "id": format!("{actor_id}/follows/1"),
+            "actor": follow_actor_id,
+            "object": "http://127.0.0.1:3000/users/alice"
+        }
+    }))
+    .expect("serialize Undo Follow")
+}
+
 async fn spawn_actor_server() -> (
     String,
     tokio::sync::mpsc::Receiver<RecordedRequest>,
@@ -369,6 +385,100 @@ async fn verifies_signed_follow_with_independent_key_id() {
         1
     );
     requests.recv().await.expect("receive Accept request");
+    actor_server.abort();
+}
+
+#[tokio::test]
+async fn signed_undo_follow_removes_persisted_follower() {
+    let (actor_id, mut requests, actor_server) = spawn_actor_server().await;
+    let mut config = test_config();
+    config.inbox_auth_policy = InboxAuthPolicy::RequireSigned;
+    let state = test_app_state(config).expect("build app state");
+    let key_id = format!("{actor_id}#main-key");
+    let follow_body = id_only_follow_body(&actor_id);
+    let follow_response = post_signed_inbox(
+        router_with_state(state.clone()),
+        "/users/alice/inbox",
+        &key_id,
+        &follow_body,
+        follow_body.clone(),
+    )
+    .await;
+    assert_eq!(follow_response.status(), StatusCode::ACCEPTED);
+    requests.recv().await.expect("receive Accept request");
+
+    let undo_body = undo_follow_body(&actor_id, &actor_id);
+    let undo_response = post_signed_inbox(
+        router_with_state(state.clone()),
+        "/users/alice/inbox",
+        &key_id,
+        &undo_body,
+        undo_body.clone(),
+    )
+    .await;
+
+    assert_eq!(undo_response.status(), StatusCode::ACCEPTED);
+    assert!(
+        state
+            .core
+            .lock()
+            .expect("core lock")
+            .state()
+            .followers()
+            .is_empty()
+    );
+    assert!(
+        state
+            .store
+            .lock()
+            .expect("store lock")
+            .list_followers(&state.local_actor.id)
+            .expect("list followers")
+            .is_empty()
+    );
+    actor_server.abort();
+}
+
+#[tokio::test]
+async fn signed_undo_follow_rejects_actor_that_does_not_own_follow() {
+    let (actor_id, mut requests, actor_server) = spawn_actor_server().await;
+    let mut config = test_config();
+    config.inbox_auth_policy = InboxAuthPolicy::RequireSigned;
+    let state = test_app_state(config).expect("build app state");
+    let key_id = format!("{actor_id}#main-key");
+    let follow_body = id_only_follow_body(&actor_id);
+    let follow_response = post_signed_inbox(
+        router_with_state(state.clone()),
+        "/users/alice/inbox",
+        &key_id,
+        &follow_body,
+        follow_body.clone(),
+    )
+    .await;
+    assert_eq!(follow_response.status(), StatusCode::ACCEPTED);
+    requests.recv().await.expect("receive Accept request");
+
+    let undo_body = undo_follow_body(&actor_id, "https://remote.example/users/mallory");
+    let undo_response = post_signed_inbox(
+        router_with_state(state.clone()),
+        "/users/alice/inbox",
+        &key_id,
+        &undo_body,
+        undo_body.clone(),
+    )
+    .await;
+
+    assert_eq!(undo_response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        state
+            .store
+            .lock()
+            .expect("store lock")
+            .list_followers(&state.local_actor.id)
+            .expect("list followers")
+            .len(),
+        1
+    );
     actor_server.abort();
 }
 

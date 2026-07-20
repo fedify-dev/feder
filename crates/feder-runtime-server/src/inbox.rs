@@ -29,7 +29,7 @@ use feder_core::{
     Input,
     http_signatures::{create_sha256_digest_header, verify_draft_cavage},
 };
-use feder_vocab::{Actor, Follow, Iri, Reference};
+use feder_vocab::{Actor, Follow, Iri, Reference, Undo};
 use serde_json::{Value, from_slice, from_value};
 
 use crate::app::AppState;
@@ -171,6 +171,13 @@ fn activity_actor_id(value: &Value) -> Option<Iri> {
         .as_str()
         .or_else(|| actor.get("id").and_then(Value::as_str))?;
     actor_id.parse().ok()
+}
+
+fn actor_reference_id(reference: &Reference<Actor>) -> &Iri {
+    match reference {
+        Reference::Id(actor_id) => actor_id,
+        Reference::Object(actor) => &actor.id,
+    }
 }
 
 fn verify_request_date(headers: &HeaderMap) -> Result<(), StatusCode> {
@@ -332,36 +339,50 @@ pub async fn inbox(
 
     let activity_type = value.get("type").and_then(|value| value.as_str());
 
-    // Unsupported activity types will be ignored
-    if activity_type != Some("Follow") {
-        return Ok(StatusCode::ACCEPTED.into_response());
-    }
-    let mut follow: Follow = from_value(value).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let follows_local_actor = match &follow.object {
-        feder_vocab::Reference::Id(actor_id) => actor_id == &app_state.local_actor.id,
-        feder_vocab::Reference::Object(actor) => actor.id == app_state.local_actor.id,
-    };
-    if !follows_local_actor {
-        return Ok(StatusCode::ACCEPTED.into_response());
-    }
-    if let Some(actor) = verified_actor {
-        let actor_matches_signature = match &follow.actor {
-            Reference::Id(actor_id) => actor_id == &actor.id,
-            Reference::Object(follow_actor) => follow_actor.id == actor.id,
-        };
-        if !actor_matches_signature {
-            return Err(StatusCode::UNAUTHORIZED);
+    let input = match activity_type {
+        Some("Follow") => {
+            let mut follow: Follow = from_value(value).map_err(|_| StatusCode::BAD_REQUEST)?;
+            if actor_reference_id(&follow.object) != &app_state.local_actor.id {
+                return Ok(StatusCode::ACCEPTED.into_response());
+            }
+            if let Some(actor) = verified_actor {
+                if actor_reference_id(&follow.actor) != &actor.id {
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+                follow.actor = Reference::object(actor);
+            } else {
+                app_state
+                    .actor_resolver
+                    .resolve_reference(&mut follow.actor)
+                    .await
+                    .map_err(|_| StatusCode::BAD_GATEWAY)?;
+            }
+            let accept_id = accept_id_for_follow(&app_state.local_actor.id, &follow.id)?;
+            Input::received_follow(follow, accept_id)
         }
-        follow.actor = Reference::object(actor);
-    } else {
-        app_state
-            .actor_resolver
-            .resolve_reference(&mut follow.actor)
-            .await
-            .map_err(|_| StatusCode::BAD_GATEWAY)?;
-    }
-    let accept_id = accept_id_for_follow(&app_state.local_actor.id, &follow.id)?;
-    let input = Input::received_follow(follow, accept_id);
+        Some("Undo") => {
+            let undo: Undo = from_value(value).map_err(|_| StatusCode::BAD_REQUEST)?;
+            let Reference::Object(follow) = &undo.object else {
+                return Ok(StatusCode::ACCEPTED.into_response());
+            };
+            let undo_actor_id = actor_reference_id(&undo.actor);
+            if undo_actor_id != actor_reference_id(&follow.actor) {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            if verified_actor
+                .as_ref()
+                .is_some_and(|actor| undo_actor_id != &actor.id)
+            {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            if actor_reference_id(&follow.object) != &app_state.local_actor.id {
+                return Ok(StatusCode::ACCEPTED.into_response());
+            }
+            Input::received_undo_follow(undo)
+        }
+        // Unsupported activity types will be ignored.
+        _ => return Ok(StatusCode::ACCEPTED.into_response()),
+    };
 
     let result = {
         let mut core = app_state

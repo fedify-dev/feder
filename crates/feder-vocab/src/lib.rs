@@ -173,6 +173,7 @@ macro_rules! activitystreams_type {
 activitystreams_type!(NoteType, Note);
 activitystreams_type!(FollowType, Follow);
 activitystreams_type!(AcceptType, Accept);
+activitystreams_type!(UndoType, Undo);
 activitystreams_type!(CreateType, Create);
 
 /// A JSON-LD context represented by one or more IRIs.
@@ -399,6 +400,35 @@ impl Accept {
                     .expect("valid ActivityStreams IRI"),
             ),
             kind: AcceptType::default(),
+            id,
+            actor,
+            object,
+        }
+    }
+}
+
+/// A minimal Undo activity for a Follow.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Undo {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: UndoType,
+    pub id: Iri,
+    pub actor: Reference<Actor>,
+    pub object: Reference<Follow>,
+}
+
+impl Undo {
+    #[must_use]
+    pub fn new(id: Iri, actor: Reference<Actor>, object: Reference<Follow>) -> Self {
+        Self {
+            context: Some(
+                ACTIVITYSTREAMS_CONTEXT
+                    .parse()
+                    .expect("valid ActivityStreams IRI"),
+            ),
+            kind: UndoType::default(),
             id,
             actor,
             object,

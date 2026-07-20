@@ -106,6 +106,15 @@ impl RuntimeStore for SqliteStore {
                         ],
                     )?;
                 }
+                Action::RemoveFollower(action) => {
+                    tx.execute(
+                        r#"
+                        DELETE FROM followers
+                        WHERE follower_actor_id = ?1 AND following_actor_id = ?2
+                        "#,
+                        params![action.follower.as_str(), action.following.as_str()],
+                    )?;
+                }
                 Action::StoreDeliveryTarget(action) => {
                     tx.execute(
                         r#"
@@ -263,7 +272,7 @@ fn parse_optional_iri(value: Option<String>) -> Result<Option<Iri>, StoreError> 
 
 #[cfg(test)]
 mod tests {
-    use feder_core::{Action, StoreFollower};
+    use feder_core::{Action, RemoveFollower, StoreFollower};
 
     use super::*;
 
@@ -478,6 +487,27 @@ mod tests {
 
         assert_eq!(follower, "https://remote.example/users/bob");
         assert_eq!(following, "https://example.com/users/alice");
+    }
+
+    #[test]
+    fn persist_actions_removes_follower() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        store
+            .persist_actions(&[store_follower_action()])
+            .expect("persist follower action");
+
+        store
+            .persist_actions(&[Action::RemoveFollower(RemoveFollower {
+                follower: iri("https://remote.example/users/bob"),
+                following: iri("https://example.com/users/alice"),
+            })])
+            .expect("persist follower removal action");
+
+        let follower_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM followers", [], |row| row.get(0))
+            .expect("query follower count");
+        assert_eq!(follower_count, 0);
     }
 
     #[test]

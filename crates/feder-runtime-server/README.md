@@ -9,12 +9,12 @@ It provides a health check endpoint, WebFinger discovery, and a local actor
 route. The caller chooses concrete bind addresses, actor IRIs, usernames, and
 handle hosts.
 
-ActivityPub inbox handling for supported Follow activities is included. The
-runtime can use in-memory storage for tests and examples, or file-backed SQLite
-storage for persisted follower state. Outgoing `SendActivity` actions are sent
-synchronously to recipient inboxes as ActivityPub JSON signed with the actor's
-draft-Cavage RSA key. HTTP signature verification is intentionally left to a
-later issue.
+ActivityPub inbox handling for Follow and embedded Undo(Follow) activities is
+included. The runtime can use in-memory storage for tests and examples, or
+file-backed SQLite storage for persisted follower state. Outgoing
+`SendActivity` actions are sent synchronously to recipient inboxes as
+ActivityPub JSON signed with the actor's draft-Cavage RSA key. Incoming inbox
+requests can require verification with the same signature scheme.
 
 
 Example

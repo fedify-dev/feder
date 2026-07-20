@@ -15,7 +15,7 @@
 
 use feder_vocab::{
     ACTIVITYSTREAMS_CONTEXT, Accept, Actor, Create, CryptographicKey, Follow, Iri, Note, Reference,
-    References, SECURITY_CONTEXT,
+    References, SECURITY_CONTEXT, Undo,
 };
 use serde_json::{Value, json};
 
@@ -120,6 +120,28 @@ fn accept_activity_can_embed_follow_activity() {
                     "preferredUsername": "alice"
                 }
             }
+        })
+    );
+}
+
+#[test]
+fn undo_activity_can_embed_follow_activity() {
+    let follow: Follow =
+        serde_json::from_value(incoming_follow_json()).expect("deserialize incoming follow");
+    let undo = Undo::new(
+        iri("https://remote.example/activities/undo/1"),
+        Reference::id(iri("https://remote.example/users/bob")),
+        Reference::object(follow),
+    );
+
+    assert_eq!(
+        serialize_to_value(undo),
+        json!({
+            "@context": ACTIVITYSTREAMS_CONTEXT,
+            "type": "Undo",
+            "id": "https://remote.example/activities/undo/1",
+            "actor": "https://remote.example/users/bob",
+            "object": incoming_follow_json()
         })
     );
 }

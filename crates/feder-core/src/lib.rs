@@ -55,6 +55,10 @@ impl FederCore {
                 let actions = self.state.record_follow(input);
                 HandleResult::new(actions)
             }
+            Input::ReceivedUndoFollow(input) => {
+                let actions = self.state.record_undo_follow(input);
+                HandleResult::new(actions)
+            }
             Input::UserCreateNote(input) => {
                 let actions = self.state.record_created_note(input);
                 HandleResult::new(actions)
@@ -206,6 +210,45 @@ impl FederState {
         actions
     }
 
+    fn record_undo_follow(&mut self, input: ReceivedUndoFollow) -> Vec<Action> {
+        let undo = input.undo;
+        let Some(undo_actor) = reference_id(&undo.actor) else {
+            return Vec::new();
+        };
+        let vocab::Reference::Object(follow) = undo.object else {
+            return Vec::new();
+        };
+        let Some(follower) = reference_id(&follow.actor) else {
+            return Vec::new();
+        };
+        let Some(following) = reference_id(&follow.object) else {
+            return Vec::new();
+        };
+
+        if undo_actor != follower || following != &self.local_actor.id {
+            return Vec::new();
+        }
+
+        let relation = Follower {
+            follower: follower.clone(),
+            following: following.clone(),
+        };
+        self.followers.retain(|existing| existing != &relation);
+        if !self
+            .followers
+            .iter()
+            .any(|existing| existing.follower == *follower)
+        {
+            self.delivery_targets
+                .retain(|target| target.actor != *follower);
+        }
+
+        Vec::from([Action::RemoveFollower(RemoveFollower {
+            follower: follower.clone(),
+            following: following.clone(),
+        })])
+    }
+
     fn record_created_note(&mut self, input: UserCreateNote) -> Vec<Action> {
         let Some(actor) = reference_id(&input.actor) else {
             return Vec::new();
@@ -270,6 +313,7 @@ impl HasId for vocab::Actor {
 #[non_exhaustive]
 pub enum Input {
     ReceivedFollow(ReceivedFollow),
+    ReceivedUndoFollow(ReceivedUndoFollow),
     UserCreateNote(UserCreateNote),
 }
 
@@ -281,6 +325,12 @@ pub enum Input {
 pub struct ReceivedFollow {
     pub follow: vocab::Follow,
     pub accept_id: vocab::Iri,
+}
+
+/// Runtime-provided data for handling a received Undo of a Follow.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReceivedUndoFollow {
+    pub undo: vocab::Undo,
 }
 
 /// Runtime-provided data for creating a local note.
@@ -299,6 +349,10 @@ pub struct UserCreateNote {
 impl Input {
     pub fn received_follow(follow: vocab::Follow, accept_id: vocab::Iri) -> Self {
         Self::ReceivedFollow(ReceivedFollow { follow, accept_id })
+    }
+
+    pub fn received_undo_follow(undo: vocab::Undo) -> Self {
+        Self::ReceivedUndoFollow(ReceivedUndoFollow { undo })
     }
 }
 
@@ -323,6 +377,7 @@ pub struct DeliveryTarget {
 #[non_exhaustive]
 pub enum Action {
     StoreFollower(StoreFollower),
+    RemoveFollower(RemoveFollower),
     StoreDeliveryTarget(StoreDeliveryTarget),
     StoreObject(StoreObject),
     SendActivity(SendActivity),
@@ -332,6 +387,14 @@ pub enum Action {
 pub struct StoreFollower {
     pub follower: vocab::Reference<vocab::Actor>,
     pub following: vocab::Reference<vocab::Actor>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoveFollower {
+    /// The remote actor ending the follower relation.
+    pub follower: vocab::Iri,
+    /// The local actor that was followed.
+    pub following: vocab::Iri,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -407,6 +470,14 @@ mod tests {
             follow,
             accept_id: iri(id),
         })
+    }
+
+    fn received_undo_follow(follow: vocab::Follow, actor_id: &str) -> Input {
+        Input::received_undo_follow(vocab::Undo::new(
+            iri("https://remote.example/activities/undo/1"),
+            vocab::Reference::id(iri(actor_id)),
+            vocab::Reference::object(follow),
+        ))
     }
 
     #[test]
@@ -603,6 +674,81 @@ mod tests {
         assert!(result.is_empty());
         assert!(core.state().followers().is_empty());
         assert!(core.state().delivery_targets().is_empty());
+    }
+
+    #[test]
+    fn received_undo_follow_removes_follower_and_delivery_target() {
+        let mut core = core();
+        let follow = vocab::Follow::new(
+            iri("https://remote.example/activities/follow/1"),
+            vocab::Reference::object(actor("https://remote.example/users/bob")),
+            vocab::Reference::id(iri("https://example.com/users/alice")),
+        );
+        let _ = core.handle(received_follow(
+            follow.clone(),
+            "https://example.com/activities/accept/1",
+        ));
+
+        let result = core.handle(received_undo_follow(
+            follow,
+            "https://remote.example/users/bob",
+        ));
+
+        assert_eq!(
+            result.actions,
+            Vec::from([Action::RemoveFollower(RemoveFollower {
+                follower: iri("https://remote.example/users/bob"),
+                following: iri("https://example.com/users/alice"),
+            })])
+        );
+        assert!(core.state().followers().is_empty());
+        assert!(core.state().delivery_targets().is_empty());
+    }
+
+    #[test]
+    fn received_undo_follow_rejects_actor_that_does_not_own_follow() {
+        let mut core = core();
+        let follow = vocab::Follow::new(
+            iri("https://remote.example/activities/follow/1"),
+            vocab::Reference::object(actor("https://remote.example/users/bob")),
+            vocab::Reference::id(iri("https://example.com/users/alice")),
+        );
+        let _ = core.handle(received_follow(
+            follow.clone(),
+            "https://example.com/activities/accept/1",
+        ));
+
+        let result = core.handle(received_undo_follow(
+            follow,
+            "https://remote.example/users/mallory",
+        ));
+
+        assert!(result.is_empty());
+        assert_eq!(core.state().followers().len(), 1);
+        assert_eq!(core.state().delivery_targets().len(), 1);
+    }
+
+    #[test]
+    fn received_undo_follow_emits_idempotent_removal_action() {
+        let follow = vocab::Follow::new(
+            iri("https://remote.example/activities/follow/1"),
+            vocab::Reference::id(iri("https://remote.example/users/bob")),
+            vocab::Reference::id(iri("https://example.com/users/alice")),
+        );
+        let mut core = core();
+
+        let result = core.handle(received_undo_follow(
+            follow,
+            "https://remote.example/users/bob",
+        ));
+
+        assert_eq!(
+            result.actions,
+            Vec::from([Action::RemoveFollower(RemoveFollower {
+                follower: iri("https://remote.example/users/bob"),
+                following: iri("https://example.com/users/alice"),
+            })])
+        );
     }
 
     #[test]
