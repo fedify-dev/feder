@@ -329,10 +329,18 @@ pub struct Note {
     pub id: Iri,
     #[serde(rename = "attributedTo", skip_serializing_if = "Option::is_none")]
     pub attributed_to: Option<Reference<Actor>>,
+    #[serde(default, skip_serializing_if = "References::is_empty")]
+    pub to: References<Iri>,
+    #[serde(default, skip_serializing_if = "References::is_empty")]
+    pub cc: References<Iri>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(rename = "mediaType", skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub published: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<Iri>,
 }
 
 impl Note {
@@ -347,8 +355,12 @@ impl Note {
             kind: NoteType::default(),
             id,
             attributed_to: None,
+            to: References::new(),
+            cc: References::new(),
             content: None,
+            media_type: None,
             published: None,
+            url: None,
         }
     }
 }

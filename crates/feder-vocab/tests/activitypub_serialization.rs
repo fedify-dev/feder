@@ -176,8 +176,12 @@ fn ordered_collection_serializes_actor_iris() {
 fn local_note_serializes_as_create_activity() {
     let mut note = Note::new(iri("https://example.com/notes/1"));
     note.attributed_to = Some(Reference::id(iri("https://example.com/users/alice")));
+    note.to = References::one(iri("https://www.w3.org/ns/activitystreams#Public"));
+    note.cc = References::one(iri("https://example.com/users/alice/followers"));
     note.content = Some("Hello from Feder.".to_string());
+    note.media_type = Some("text/html".to_string());
     note.published = Some("2026-06-02T00:00:00Z".to_string());
+    note.url = Some(iri("https://example.com/@alice/1"));
 
     let create = Create::new(
         iri("https://example.com/activities/create/1"),
@@ -197,8 +201,12 @@ fn local_note_serializes_as_create_activity() {
                 "type": "Note",
                 "id": "https://example.com/notes/1",
                 "attributedTo": "https://example.com/users/alice",
+                "to": "https://www.w3.org/ns/activitystreams#Public",
+                "cc": "https://example.com/users/alice/followers",
                 "content": "Hello from Feder.",
-                "published": "2026-06-02T00:00:00Z"
+                "mediaType": "text/html",
+                "published": "2026-06-02T00:00:00Z",
+                "url": "https://example.com/@alice/1"
             }
         })
     );
