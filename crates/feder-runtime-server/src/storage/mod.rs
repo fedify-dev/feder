@@ -16,7 +16,7 @@
 pub mod sqlite;
 
 use feder_core::{
-    Action,
+    Action, Object,
     http_signatures::{ActorKeyPair, KeyError},
 };
 use feder_vocab::Iri;
@@ -48,6 +48,12 @@ pub enum StoreError {
     #[error("invalid IRI: {0}")]
     InvalidIri(String),
 
+    #[error("unsupported runtime object type")]
+    UnsupportedObjectType,
+
+    #[error("unsupported stored object type: {0}")]
+    UnsupportedStoredObjectType(String),
+
     #[error(transparent)]
     ActorKey(#[from] KeyError),
 }
@@ -58,6 +64,8 @@ pub trait RuntimeStore {
     fn list_followers(&self, actor_id: &Iri) -> Result<Vec<StoredFollower>, StoreError>;
 
     fn list_follower_recipients(&self, actor_id: &Iri) -> Result<Vec<StoredRecipient>, StoreError>;
+
+    fn load_object(&self, object_id: &Iri) -> Result<Option<Object>, StoreError>;
 
     fn insert_actor_key_pair(
         &mut self,

@@ -15,8 +15,8 @@
 
 use std::path::Path;
 
-use feder_core::{Action, http_signatures::ActorKeyPair};
-use feder_vocab::{Actor, Iri, Reference};
+use feder_core::{Action, Object, http_signatures::ActorKeyPair};
+use feder_vocab::{Actor, Iri, Note, Reference};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::storage::{RuntimeStore, StoreError, StoredFollower, StoredRecipient};
@@ -62,6 +62,11 @@ impl SqliteStore {
                 actor_id TEXT PRIMARY KEY NOT NULL,
                 private_key_pem TEXT NOT NULL,
                 public_key_pem TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS objects (
+                object_id TEXT PRIMARY KEY NOT NULL,
+                object_type TEXT NOT NULL,
+                object_json TEXT NOT NULL
             );
             "#,
         )?;
@@ -123,6 +128,19 @@ impl RuntimeStore for SqliteStore {
                         WHERE follower_actor_id = ?1
                         "#,
                         params![action.target.actor.as_str(), action.target.inbox.as_str()],
+                    )?;
+                }
+                Action::StoreObject(action) => {
+                    let (object_id, object_type, object_json) = encode_object(&action.object)?;
+                    tx.execute(
+                        r#"
+                        INSERT INTO objects (object_id, object_type, object_json)
+                        VALUES (?1, ?2, ?3)
+                        ON CONFLICT(object_id) DO UPDATE SET
+                            object_type = excluded.object_type,
+                            object_json = excluded.object_json
+                        "#,
+                        params![object_id.as_str(), object_type, object_json],
                     )?;
                 }
                 _ => {}
@@ -193,6 +211,25 @@ impl RuntimeStore for SqliteStore {
         .collect()
     }
 
+    fn load_object(&self, object_id: &Iri) -> Result<Option<Object>, StoreError> {
+        let stored = self
+            .conn
+            .query_row(
+                r#"
+                SELECT object_type, object_json
+                FROM objects
+                WHERE object_id = ?1
+                "#,
+                [object_id.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+
+        stored
+            .map(|(object_type, object_json)| decode_object(&object_type, &object_json))
+            .transpose()
+    }
+
     fn insert_actor_key_pair(
         &mut self,
         actor_id: &Iri,
@@ -236,6 +273,22 @@ impl RuntimeStore for SqliteStore {
     }
 }
 
+fn encode_object(object: &Object) -> Result<(&Iri, &'static str, String), StoreError> {
+    match object {
+        Object::Note(note) => Ok((&note.id, "Note", serde_json::to_string(note)?)),
+        _ => Err(StoreError::UnsupportedObjectType),
+    }
+}
+
+fn decode_object(object_type: &str, object_json: &str) -> Result<Object, StoreError> {
+    match object_type {
+        "Note" => Ok(Object::Note(serde_json::from_str::<Note>(object_json)?)),
+        object_type => Err(StoreError::UnsupportedStoredObjectType(
+            object_type.to_string(),
+        )),
+    }
+}
+
 fn actor_reference_id(reference: &Reference<Actor>) -> &Iri {
     match reference {
         Reference::Id(id) => id,
@@ -272,7 +325,7 @@ fn parse_optional_iri(value: Option<String>) -> Result<Option<Iri>, StoreError> 
 
 #[cfg(test)]
 mod tests {
-    use feder_core::{Action, RemoveFollower, StoreFollower};
+    use feder_core::{Action, Object, RemoveFollower, StoreFollower, StoreObject};
 
     use super::*;
 
@@ -287,6 +340,16 @@ mod tests {
         Action::StoreFollower(StoreFollower {
             follower: Reference::id(iri("https://remote.example/users/bob")),
             following: Reference::id(iri("https://example.com/users/alice")),
+        })
+    }
+
+    fn store_note_action(content: &str) -> Action {
+        let mut note = Note::new(iri("https://example.com/users/alice/posts/1"));
+        note.attributed_to = Some(Reference::id(iri("https://example.com/users/alice")));
+        note.content = Some(content.to_string());
+
+        Action::StoreObject(StoreObject {
+            object: Object::Note(note),
         })
     }
 
@@ -369,6 +432,114 @@ mod tests {
                 "public_key_pem".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn open_in_memory_initializes_objects_table() {
+        let store = SqliteStore::open_in_memory().expect("open in-memory store");
+
+        let columns: Vec<String> = {
+            let mut stmt = store
+                .conn
+                .prepare("PRAGMA table_info(objects)")
+                .expect("prepare objects table info query");
+            stmt.query_map([], |row| row.get("name"))
+                .expect("query objects table info")
+                .collect::<Result<_, _>>()
+                .expect("collect objects table columns")
+        };
+
+        assert_eq!(
+            columns,
+            vec![
+                "object_id".to_string(),
+                "object_type".to_string(),
+                "object_json".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn persist_actions_stores_and_loads_note() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let action = store_note_action("Hello from Feder.");
+
+        store
+            .persist_actions(core::slice::from_ref(&action))
+            .expect("persist note action");
+        let object = store
+            .load_object(&iri("https://example.com/users/alice/posts/1"))
+            .expect("load note")
+            .expect("stored note");
+
+        let Action::StoreObject(expected) = action else {
+            panic!("expected store object action");
+        };
+        assert_eq!(object, expected.object);
+    }
+
+    #[test]
+    fn persist_actions_replaces_object_with_same_id() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+
+        store
+            .persist_actions(&[store_note_action("Original")])
+            .expect("persist original note");
+        store
+            .persist_actions(&[store_note_action("Updated")])
+            .expect("replace note");
+
+        let object = store
+            .load_object(&iri("https://example.com/users/alice/posts/1"))
+            .expect("load note")
+            .expect("stored note");
+        let Object::Note(note) = object else {
+            panic!("expected stored note");
+        };
+        assert_eq!(note.content.as_deref(), Some("Updated"));
+    }
+
+    #[test]
+    fn load_object_returns_none_for_unknown_id() {
+        let store = SqliteStore::open_in_memory().expect("open in-memory store");
+
+        let object = store
+            .load_object(&iri("https://example.com/users/alice/posts/unknown"))
+            .expect("load unknown object");
+
+        assert!(object.is_none());
+    }
+
+    #[test]
+    fn stored_note_persists_across_store_reopen() {
+        let path = std::env::temp_dir().join(format!(
+            "feder-object-test-{}-{}.sqlite3",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time after unix epoch")
+                .as_nanos()
+        ));
+
+        {
+            let mut store = SqliteStore::open(&path).expect("open SQLite store");
+            store
+                .persist_actions(&[store_note_action("Persistent note")])
+                .expect("persist note action");
+        }
+
+        let store = SqliteStore::open(&path).expect("reopen SQLite store");
+        let object = store
+            .load_object(&iri("https://example.com/users/alice/posts/1"))
+            .expect("load persisted note")
+            .expect("persisted note");
+        let Object::Note(note) = object else {
+            panic!("expected stored note");
+        };
+        assert_eq!(note.content.as_deref(), Some("Persistent note"));
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
