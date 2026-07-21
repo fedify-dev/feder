@@ -21,6 +21,7 @@ pub mod followers;
 pub mod inbox;
 mod negotiation;
 pub mod object;
+mod operation;
 pub mod send;
 pub mod storage;
 mod url;

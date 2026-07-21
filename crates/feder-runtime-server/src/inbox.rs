@@ -32,10 +32,9 @@ use feder_core::{
 use feder_vocab::{Actor, Follow, Iri, Reference, Undo};
 use serde_json::{Value, from_slice, from_value};
 
-use crate::app::AppState;
 use crate::config::InboxAuthPolicy;
 use crate::send::SendError;
-use crate::storage::RuntimeStore;
+use crate::{Error, app::AppState};
 
 const MAX_SIGNATURE_AGE: Duration = Duration::from_secs(65 * 60);
 const MAX_CLOCK_SKEW: Duration = Duration::from_secs(60 * 60);
@@ -384,34 +383,16 @@ pub async fn inbox(
         _ => return Ok(StatusCode::ACCEPTED.into_response()),
     };
 
-    let result = {
-        let mut core = app_state
-            .core
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        core.handle(input)
-    };
-
     app_state
-        .store
-        .lock()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .persist_actions(&result.actions)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    app_state
-        .activity_sender
-        .send_actions(&result.actions)
+        .handle_input(input)
         .await
         .map_err(|error| match error {
-            SendError::PrivateInboxAddress { .. }
-            | SendError::Request(_)
-            | SendError::UnsuccessfulStatus { .. } => StatusCode::BAD_GATEWAY,
-            SendError::BuildClient(_)
-            | SendError::InvalidInbox(_)
-            | SendError::Serialize(_)
-            | SendError::Sign(_)
-            | SendError::UnsupportedActivity => StatusCode::INTERNAL_SERVER_ERROR,
+            Error::ActivitySender(
+                SendError::PrivateInboxAddress { .. }
+                | SendError::Request(_)
+                | SendError::UnsuccessfulStatus { .. },
+            ) => StatusCode::BAD_GATEWAY,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
         })?;
 
     Ok(StatusCode::ACCEPTED.into_response())
