@@ -15,9 +15,7 @@
 
 use std::collections::HashSet;
 
-use feder_core::{
-    Action, HandleResult, Input, SendActivity, SendActivityToFollowers, UserCreateNote,
-};
+use feder_core::{Action, HandleResult, Input, Recipients, SendActivity, UserCreateNote};
 
 use crate::{Error, app::AppState, storage::RuntimeStore};
 
@@ -36,43 +34,44 @@ impl AppState {
             core.handle(input)
         };
 
-        let delivery_actions = {
+        let deliveries = {
             let mut store = self
                 .store
                 .lock()
                 .map_err(|_| Error::StorageStateUnavailable)?;
             store.persist_actions(&result.actions)?;
-            resolve_delivery_actions(&*store, &result.actions)?
+            resolve_outbound_deliveries(&*store, &result.actions)?
         };
 
-        self.activity_sender.send_actions(&delivery_actions).await?;
+        self.activity_sender.send_actions(&deliveries).await?;
 
         Ok(result)
     }
 }
 
-fn resolve_delivery_actions(
+fn resolve_outbound_deliveries(
     store: &impl RuntimeStore,
     actions: &[Action],
-) -> Result<Vec<Action>, Error> {
+) -> Result<Vec<SendActivity>, Error> {
     let mut resolved = Vec::new();
 
     for action in actions {
-        match action {
-            Action::SendActivity(_) => resolved.push(action.clone()),
-            Action::SendActivityToFollowers(SendActivityToFollowers { activity, actor }) => {
-                let mut seen_inboxes = HashSet::new();
-                for recipient in store.list_follower_recipients(actor)? {
-                    let inbox = recipient.shared_inbox.unwrap_or(recipient.inbox);
-                    if seen_inboxes.insert(inbox.clone()) {
-                        resolved.push(Action::SendActivity(SendActivity {
-                            activity: activity.clone(),
-                            inbox,
-                        }));
+        if let Action::SendActivity(send) = action {
+            match &send.recipients {
+                Recipients::Inbox(_) => resolved.push(send.clone()),
+                Recipients::Followers(actor) => {
+                    let mut seen_inboxes = HashSet::new();
+                    for recipient in store.list_follower_recipients(actor)? {
+                        let inbox = recipient.shared_inbox.unwrap_or(recipient.inbox);
+                        if seen_inboxes.insert(inbox.clone()) {
+                            resolved.push(SendActivity {
+                                activity: send.activity.clone(),
+                                recipients: Recipients::Inbox(inbox),
+                            });
+                        }
                     }
                 }
             }
-            _ => {}
         }
     }
 

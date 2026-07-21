@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use axum::http::StatusCode;
-use feder_core::{Action, Object, StoreFollower, UserCreateNote};
+use feder_core::{Action, Object, Recipients, StoreFollower, UserCreateNote};
 use feder_runtime_server::{Error, config::StorageConfig, send::SendError, storage::RuntimeStore};
 use feder_vocab::{Actor, Iri, Reference};
 
@@ -29,8 +29,12 @@ fn create_note_input() -> UserCreateNote {
         note_id: iri("http://127.0.0.1:3000/users/alice/posts/1"),
         create_id: iri("http://127.0.0.1:3000/users/alice/activities/create/1"),
         actor: Reference::id(iri("http://127.0.0.1:3000/users/alice")),
+        to: feder_vocab::References::one(iri("https://www.w3.org/ns/activitystreams#Public")),
+        cc: feder_vocab::References::one(iri("http://127.0.0.1:3000/users/alice/followers")),
         content: "Hello from Feder.".to_string(),
+        media_type: Some("text/html".to_string()),
         published: Some("2026-07-21T00:00:00Z".to_string()),
+        url: Some(iri("http://127.0.0.1:3000/@alice/1")),
     }
 }
 
@@ -66,8 +70,9 @@ async fn create_note_persists_and_delivers_the_core_actions() {
     assert_eq!(result.actions.len(), 2);
     assert!(matches!(result.actions[0], Action::StoreObject(_)));
     assert!(matches!(
-        result.actions[1],
-        Action::SendActivityToFollowers(_)
+        &result.actions[1],
+        Action::SendActivity(send)
+            if matches!(&send.recipients, Recipients::Followers(_))
     ));
 
     let stored = state
@@ -86,7 +91,19 @@ async fn create_note_persists_and_delivers_the_core_actions() {
     let activity: serde_json::Value =
         serde_json::from_slice(&request.body).expect("valid Create activity");
     assert_eq!(activity["type"], "Create");
+    assert_eq!(
+        activity["to"],
+        "https://www.w3.org/ns/activitystreams#Public"
+    );
+    assert_eq!(
+        activity["cc"],
+        "http://127.0.0.1:3000/users/alice/followers"
+    );
     assert_eq!(activity["object"]["id"], note.id.as_str());
+    assert_eq!(activity["object"]["to"], activity["to"]);
+    assert_eq!(activity["object"]["cc"], activity["cc"]);
+    assert_eq!(activity["object"]["mediaType"], "text/html");
+    assert_eq!(activity["object"]["url"], "http://127.0.0.1:3000/@alice/1");
     inbox_server.abort();
 }
 

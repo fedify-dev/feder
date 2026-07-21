@@ -462,6 +462,10 @@ pub struct Create<T> {
     pub id: Iri,
     pub actor: Reference<Actor>,
     pub object: Reference<T>,
+    #[serde(default, skip_serializing_if = "References::is_empty")]
+    pub to: References<Iri>,
+    #[serde(default, skip_serializing_if = "References::is_empty")]
+    pub cc: References<Iri>,
 }
 
 impl<T> Create<T> {
@@ -477,6 +481,8 @@ impl<T> Create<T> {
             id,
             actor,
             object,
+            to: References::new(),
+            cc: References::new(),
         }
     }
 }
@@ -625,11 +631,13 @@ mod tests {
         note.content = Some("Hello, fediverse.".to_string());
         note.published = Some("2026-05-29T06:30:00Z".to_string());
 
-        let create = Create::new(
+        let mut create = Create::new(
             iri("https://example.com/activities/create/1"),
             Reference::id(iri("https://example.com/users/alice")),
             Reference::object(note),
         );
+        create.to = References::one(iri("https://www.w3.org/ns/activitystreams#Public"));
+        create.cc = References::one(iri("https://example.com/users/alice/followers"));
 
         assert_eq!(roundtrip(&create), create);
     }

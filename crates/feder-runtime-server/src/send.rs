@@ -17,7 +17,7 @@ use std::{sync::Arc, time::SystemTime};
 
 use crate::{config::OutboundAddressPolicy, url};
 use feder_core::{
-    Action, Activity, SendActivity,
+    Activity, Recipients, SendActivity,
     http_signatures::{
         ActorKeyPair, HttpSignatureError, create_sha256_digest_header, sign_draft_cavage,
     },
@@ -54,12 +54,11 @@ impl ActivitySender {
     }
 
     /// Attempts every send action and returns the first error encountered.
-    pub async fn send_actions(&self, actions: &[Action]) -> Result<(), SendError> {
+    pub async fn send_actions(&self, actions: &[SendActivity]) -> Result<(), SendError> {
         let mut first_error = None;
 
         for action in actions {
-            if let Action::SendActivity(send) = action
-                && let Err(error) = self.send(send).await
+            if let Err(error) = self.send(action).await
                 && first_error.is_none()
             {
                 first_error = Some(error);
@@ -76,20 +75,23 @@ impl ActivitySender {
             _ => return Err(SendError::UnsupportedActivity),
         }
         .map_err(SendError::Serialize)?;
-        let url = Url::parse(send.inbox.as_str())
-            .map_err(|_| SendError::InvalidInbox(send.inbox.to_string()))?;
+        let Recipients::Inbox(inbox) = &send.recipients else {
+            return Err(SendError::UnresolvedRecipients);
+        };
+        let url =
+            Url::parse(inbox.as_str()).map_err(|_| SendError::InvalidInbox(inbox.to_string()))?;
         if !matches!(url.scheme(), "http" | "https") {
-            return Err(SendError::InvalidInbox(send.inbox.to_string()));
+            return Err(SendError::InvalidInbox(inbox.to_string()));
         }
         crate::url::validate_literal_host(&url, self.address_policy).map_err(|address| {
             SendError::PrivateInboxAddress {
-                inbox: send.inbox.to_string(),
+                inbox: inbox.to_string(),
                 address,
             }
         })?;
         let mut host = url
             .host()
-            .ok_or_else(|| SendError::InvalidInbox(send.inbox.to_string()))?
+            .ok_or_else(|| SendError::InvalidInbox(inbox.to_string()))?
             .to_string();
         if let Some(port) = url.port() {
             host = format!("{host}:{port}");
@@ -131,7 +133,7 @@ impl ActivitySender {
 
         if !response.status().is_success() {
             return Err(SendError::UnsuccessfulStatus {
-                inbox: send.inbox.to_string(),
+                inbox: inbox.to_string(),
                 status: response.status(),
             });
         }
@@ -168,4 +170,7 @@ pub enum SendError {
 
     #[error("activity type is not supported for sending")]
     UnsupportedActivity,
+
+    #[error("activity recipients must resolve to an inbox before sending")]
+    UnresolvedRecipients,
 }

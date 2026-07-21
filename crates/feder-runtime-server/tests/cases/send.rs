@@ -15,7 +15,7 @@
 
 use axum::http::StatusCode;
 use feder_core::{
-    Action, Activity, SendActivity,
+    Activity, Recipients, SendActivity,
     http_signatures::{ActorKeyPair, sign_draft_cavage},
 };
 use feder_runtime_server::{OutboundAddressPolicy, send::SendError};
@@ -23,7 +23,7 @@ use feder_vocab::{Create, Note, Reference};
 
 use crate::common::{spawn_inbox_server, test_activity_sender, test_activity_sender_with_policy};
 
-fn create_note_send_action(inbox: &str) -> Action {
+fn create_note_send_action(inbox: &str) -> SendActivity {
     let actor_id = "https://local.example/users/alice"
         .parse()
         .expect("valid actor IRI");
@@ -40,10 +40,10 @@ fn create_note_send_action(inbox: &str) -> Action {
         Reference::object(note),
     );
 
-    Action::SendActivity(SendActivity {
+    SendActivity {
         activity: Activity::CreateNote(create),
-        inbox: inbox.parse().expect("valid inbox IRI"),
-    })
+        recipients: Recipients::Inbox(inbox.parse().expect("valid inbox IRI")),
+    }
 }
 
 #[tokio::test]
@@ -101,6 +101,20 @@ async fn sends_create_note_action() {
     assert_eq!(activity["actor"], "https://local.example/users/alice");
     assert_eq!(activity["object"]["type"], "Note");
     inbox_server.abort();
+}
+
+#[tokio::test]
+async fn rejects_unresolved_follower_recipients() {
+    let mut action = create_note_send_action("https://remote.example/inbox");
+    action.recipients = Recipients::Followers(
+        "https://local.example/users/alice"
+            .parse()
+            .expect("valid actor IRI"),
+    );
+
+    let result = test_activity_sender().send_actions(&[action]).await;
+
+    assert!(matches!(result, Err(SendError::UnresolvedRecipients)));
 }
 
 #[tokio::test]

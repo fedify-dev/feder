@@ -183,11 +183,13 @@ fn local_note_serializes_as_create_activity() {
     note.published = Some("2026-06-02T00:00:00Z".to_string());
     note.url = Some(iri("https://example.com/@alice/1"));
 
-    let create = Create::new(
+    let mut create = Create::new(
         iri("https://example.com/activities/create/1"),
         Reference::id(iri("https://example.com/users/alice")),
         Reference::object(note),
     );
+    create.to = References::one(iri("https://www.w3.org/ns/activitystreams#Public"));
+    create.cc = References::one(iri("https://example.com/users/alice/followers"));
 
     assert_eq!(
         serialize_to_value(create),
@@ -196,6 +198,8 @@ fn local_note_serializes_as_create_activity() {
             "type": "Create",
             "id": "https://example.com/activities/create/1",
             "actor": "https://example.com/users/alice",
+            "to": "https://www.w3.org/ns/activitystreams#Public",
+            "cc": "https://example.com/users/alice/followers",
             "object": {
                 "@context": ACTIVITYSTREAMS_CONTEXT,
                 "type": "Note",

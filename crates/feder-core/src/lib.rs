@@ -163,7 +163,7 @@ impl FederState {
 
             actions.push(Action::SendActivity(SendActivity {
                 activity: Activity::Accept(accept),
-                inbox,
+                recipients: Recipients::Inbox(inbox),
             }));
         }
 
@@ -214,14 +214,20 @@ impl FederState {
 
         let mut note = vocab::Note::new(input.note_id);
         note.attributed_to = Some(actor.clone());
+        note.to = input.to;
+        note.cc = input.cc;
         note.content = Some(input.content);
+        note.media_type = input.media_type;
         note.published = input.published;
+        note.url = input.url;
 
-        let create = vocab::Create::new(
+        let mut create = vocab::Create::new(
             input.create_id,
             actor,
             vocab::Reference::object(note.clone()),
         );
+        create.to = note.to.clone();
+        create.cc = note.cc.clone();
 
         let object = Object::Note(note);
         self.objects.push(object.clone());
@@ -229,9 +235,9 @@ impl FederState {
 
         Vec::from([
             Action::StoreObject(StoreObject { object }),
-            Action::SendActivityToFollowers(SendActivityToFollowers {
+            Action::SendActivity(SendActivity {
                 activity: Activity::CreateNote(create),
-                actor: self.local_actor.id.clone(),
+                recipients: Recipients::Followers(self.local_actor.id.clone()),
             }),
         ])
     }
@@ -291,8 +297,12 @@ pub struct UserCreateNote {
     pub note_id: vocab::Iri,
     pub create_id: vocab::Iri,
     pub actor: vocab::Reference<vocab::Actor>,
+    pub to: vocab::References<vocab::Iri>,
+    pub cc: vocab::References<vocab::Iri>,
     pub content: String,
+    pub media_type: Option<String>,
     pub published: Option<String>,
+    pub url: Option<vocab::Iri>,
 }
 
 impl Input {
@@ -319,7 +329,6 @@ pub enum Action {
     RemoveFollower(RemoveFollower),
     StoreObject(StoreObject),
     SendActivity(SendActivity),
-    SendActivityToFollowers(SendActivityToFollowers),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -344,15 +353,15 @@ pub struct StoreObject {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SendActivity {
     pub activity: Activity,
-    pub inbox: vocab::Iri,
+    pub recipients: Recipients,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SendActivityToFollowers {
-    /// Activity to deliver to the actor's current followers.
-    pub activity: Activity,
-    /// Local actor whose followers should receive the activity.
-    pub actor: vocab::Iri,
+pub enum Recipients {
+    /// Deliver directly to this inbox.
+    Inbox(vocab::Iri),
+    /// Deliver to the current followers of this local actor.
+    Followers(vocab::Iri),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -467,7 +476,10 @@ mod tests {
         let Action::SendActivity(send) = &result.actions[1] else {
             panic!("expected SendActivity action");
         };
-        assert_eq!(send.inbox, iri("https://remote.example/users/bob/inbox"));
+        assert_eq!(
+            send.recipients,
+            Recipients::Inbox(iri("https://remote.example/users/bob/inbox"))
+        );
 
         let Activity::Accept(accept) = &send.activity else {
             panic!("expected Accept activity");
@@ -529,7 +541,10 @@ mod tests {
         let Action::SendActivity(send) = &second_result.actions[1] else {
             panic!("expected SendActivity action");
         };
-        assert_eq!(send.inbox, iri("https://remote.example/inboxes/bob"));
+        assert_eq!(
+            send.recipients,
+            Recipients::Inbox(iri("https://remote.example/inboxes/bob"))
+        );
 
         let Activity::Accept(accept) = &send.activity else {
             panic!("expected Accept activity");
@@ -672,8 +687,12 @@ mod tests {
             note_id: iri("https://example.com/notes/1"),
             create_id: iri("https://example.com/activities/create/1"),
             actor: vocab::Reference::id(iri("https://example.com/users/alice")),
+            to: vocab::References::one(iri("https://www.w3.org/ns/activitystreams#Public")),
+            cc: vocab::References::one(iri("https://example.com/users/alice/followers")),
             content: "Hello from Feder.".to_string(),
+            media_type: Some("text/html".to_string()),
             published: Some("2026-06-10T00:00:00Z".to_string()),
+            url: Some(iri("https://example.com/@alice/1")),
         };
 
         let mut core = core();
@@ -690,7 +709,17 @@ mod tests {
             Some(vocab::Reference::id(iri("https://example.com/users/alice")))
         );
         assert_eq!(note.content, Some("Hello from Feder.".to_string()));
+        assert_eq!(
+            note.to,
+            vocab::References::one(iri("https://www.w3.org/ns/activitystreams#Public"))
+        );
+        assert_eq!(
+            note.cc,
+            vocab::References::one(iri("https://example.com/users/alice/followers"))
+        );
+        assert_eq!(note.media_type.as_deref(), Some("text/html"));
         assert_eq!(note.published, Some("2026-06-10T00:00:00Z".to_string()));
+        assert_eq!(note.url, Some(iri("https://example.com/@alice/1")));
 
         match &core.state().activities()[0] {
             Activity::CreateNote(create) => {
@@ -699,6 +728,8 @@ mod tests {
                     create.actor,
                     vocab::Reference::id(iri("https://example.com/users/alice"))
                 );
+                assert_eq!(create.to, note.to);
+                assert_eq!(create.cc, note.cc);
             }
             Activity::Accept(_) => panic!("expected Create<Note> activity"),
         }
@@ -709,10 +740,13 @@ mod tests {
                 object: Object::Note(note.clone()),
             })
         );
-        let Action::SendActivityToFollowers(send) = &result.actions[1] else {
+        let Action::SendActivity(send) = &result.actions[1] else {
             panic!("expected followers delivery action");
         };
-        assert_eq!(send.actor, iri("https://example.com/users/alice"));
+        assert_eq!(
+            send.recipients,
+            Recipients::Followers(iri("https://example.com/users/alice"))
+        );
         let Activity::CreateNote(create) = &send.activity else {
             panic!("expected Create<Note> activity");
         };
@@ -743,8 +777,8 @@ mod tests {
             panic!("expected Accept delivery action");
         };
         assert_eq!(
-            accept_delivery.inbox,
-            iri("https://remote.example/users/bob/inbox")
+            accept_delivery.recipients,
+            Recipients::Inbox(iri("https://remote.example/users/bob/inbox"))
         );
         assert!(matches!(accept_delivery.activity, Activity::Accept(_)));
 
@@ -752,18 +786,22 @@ mod tests {
             note_id: iri("https://example.com/notes/1"),
             create_id: iri("https://example.com/activities/create/1"),
             actor: vocab::Reference::id(iri("https://example.com/users/alice")),
+            to: vocab::References::new(),
+            cc: vocab::References::new(),
             content: "Hello from Feder.".to_string(),
+            media_type: None,
             published: Some("2026-06-10T00:00:00Z".to_string()),
+            url: None,
         }));
 
         assert_eq!(create_result.actions.len(), 2);
         assert!(matches!(create_result.actions[0], Action::StoreObject(_)));
-        let Action::SendActivityToFollowers(create_delivery) = &create_result.actions[1] else {
+        let Action::SendActivity(create_delivery) = &create_result.actions[1] else {
             panic!("expected followers delivery action");
         };
         assert_eq!(
-            create_delivery.actor,
-            iri("https://example.com/users/alice")
+            create_delivery.recipients,
+            Recipients::Followers(iri("https://example.com/users/alice"))
         );
         assert!(matches!(create_delivery.activity, Activity::CreateNote(_)));
 
@@ -781,8 +819,12 @@ mod tests {
             note_id: iri("https://example.com/notes/1"),
             create_id: iri("https://example.com/activities/create/1"),
             actor: vocab::Reference::object(supplied_actor),
+            to: vocab::References::new(),
+            cc: vocab::References::new(),
             content: "Hello from Feder.".to_string(),
+            media_type: None,
             published: None,
+            url: None,
         };
 
         let mut core = core();
@@ -811,8 +853,12 @@ mod tests {
             note_id: iri("https://remote.example/notes/1"),
             create_id: iri("https://remote.example/activities/create/1"),
             actor: vocab::Reference::id(iri("https://remote.example/users/bob")),
+            to: vocab::References::new(),
+            cc: vocab::References::new(),
             content: "Hello from elsewhere.".to_string(),
+            media_type: None,
             published: Some("2026-06-10T00:00:00Z".to_string()),
+            url: None,
         };
 
         let mut core = core();
