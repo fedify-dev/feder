@@ -120,16 +120,6 @@ impl RuntimeStore for SqliteStore {
                         params![action.follower.as_str(), action.following.as_str()],
                     )?;
                 }
-                Action::StoreDeliveryTarget(action) => {
-                    tx.execute(
-                        r#"
-                        UPDATE followers
-                        SET inbox_url = ?2
-                        WHERE follower_actor_id = ?1
-                        "#,
-                        params![action.target.actor.as_str(), action.target.inbox.as_str()],
-                    )?;
-                }
                 Action::StoreObject(action) => {
                     let (object_id, object_type, object_json) = encode_object(&action.object)?;
                     tx.execute(
@@ -754,22 +744,20 @@ mod tests {
     }
 
     #[test]
-    fn persist_actions_updates_follower_inbox_from_delivery_target() {
+    fn persist_actions_updates_follower_inbox_from_repeated_follow() {
         let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
 
         store
             .persist_actions(&[store_follower_action()])
             .expect("persist ID-only follower action");
+        let mut follower = actor("https://remote.example/users/bob");
+        follower.inbox = iri("https://remote.example/users/bob/updated-inbox");
         store
-            .persist_actions(&[Action::StoreDeliveryTarget(
-                feder_core::StoreDeliveryTarget {
-                    target: feder_core::DeliveryTarget {
-                        actor: iri("https://remote.example/users/bob"),
-                        inbox: iri("https://remote.example/users/bob/updated-inbox"),
-                    },
-                },
-            )])
-            .expect("persist delivery target action");
+            .persist_actions(&[Action::StoreFollower(StoreFollower {
+                follower: Reference::object(follower),
+                following: Reference::id(iri("https://example.com/users/alice")),
+            })])
+            .expect("persist repeated follower action");
 
         let recipients = store
             .list_follower_recipients(&iri("https://example.com/users/alice"))

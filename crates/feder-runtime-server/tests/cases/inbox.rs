@@ -265,9 +265,14 @@ async fn valid_follow_reaches_core() {
             core.state().followers()[0].following.as_str(),
             "http://127.0.0.1:3000/users/alice"
         );
-        assert_eq!(core.state().delivery_targets().len(), 1);
-        assert_eq!(core.state().delivery_targets()[0].inbox.as_str(), inbox);
     }
+    let followers = state
+        .store
+        .lock()
+        .expect("store lock")
+        .list_followers(&state.local_actor.id)
+        .expect("list followers");
+    assert_eq!(followers[0].inbox.as_ref().unwrap().as_str(), inbox);
 
     let request = requests.recv().await.expect("receive Accept request");
     assert_eq!(

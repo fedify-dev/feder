@@ -13,7 +13,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use feder_core::{HandleResult, Input, UserCreateNote};
+use std::collections::HashSet;
+
+use feder_core::{
+    Action, HandleResult, Input, SendActivity, SendActivityToFollowers, UserCreateNote,
+};
 
 use crate::{Error, app::AppState, storage::RuntimeStore};
 
@@ -32,13 +36,45 @@ impl AppState {
             core.handle(input)
         };
 
-        self.store
-            .lock()
-            .map_err(|_| Error::StorageStateUnavailable)?
-            .persist_actions(&result.actions)?;
+        let delivery_actions = {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| Error::StorageStateUnavailable)?;
+            store.persist_actions(&result.actions)?;
+            resolve_delivery_actions(&*store, &result.actions)?
+        };
 
-        self.activity_sender.send_actions(&result.actions).await?;
+        self.activity_sender.send_actions(&delivery_actions).await?;
 
         Ok(result)
     }
+}
+
+fn resolve_delivery_actions(
+    store: &impl RuntimeStore,
+    actions: &[Action],
+) -> Result<Vec<Action>, Error> {
+    let mut resolved = Vec::new();
+
+    for action in actions {
+        match action {
+            Action::SendActivity(_) => resolved.push(action.clone()),
+            Action::SendActivityToFollowers(SendActivityToFollowers { activity, actor }) => {
+                let mut seen_inboxes = HashSet::new();
+                for recipient in store.list_follower_recipients(actor)? {
+                    let inbox = recipient.shared_inbox.unwrap_or(recipient.inbox);
+                    if seen_inboxes.insert(inbox.clone()) {
+                        resolved.push(Action::SendActivity(SendActivity {
+                            activity: activity.clone(),
+                            inbox,
+                        }));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(resolved)
 }
