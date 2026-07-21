@@ -29,8 +29,14 @@ struct MediaRange {
     order: usize,
 }
 
+#[derive(Clone, Copy)]
+struct Preference {
+    quality: u16,
+    order: usize,
+}
+
 pub(crate) fn accepts_activitypub(headers: &HeaderMap) -> bool {
-    let mut ranges = headers
+    let ranges = headers
         .get_all(ACCEPT)
         .iter()
         .filter_map(|value| value.to_str().ok())
@@ -49,18 +55,35 @@ pub(crate) fn accepts_activitypub(headers: &HeaderMap) -> bool {
         })
         .collect::<Vec<_>>();
 
-    ranges.sort_by_key(|range| (std::cmp::Reverse(range.quality), range.order));
+    let activitypub = preferred(ACTIVITYPUB_MEDIA_TYPES, &ranges);
+    let html = preferred(HTML_MEDIA_TYPES, &ranges);
 
-    if ranges
-        .first()
-        .is_some_and(|range| HTML_MEDIA_TYPES.contains(&range.media_type.essence_str()))
-    {
-        return false;
+    match (activitypub, html) {
+        (Some(activitypub), Some(html)) => prefers(activitypub, html),
+        (Some(_), None) => true,
+        _ => false,
     }
+}
 
+fn preferred(media_types: &[&str], ranges: &[MediaRange]) -> Option<Preference> {
     ranges
         .iter()
-        .any(|range| ACTIVITYPUB_MEDIA_TYPES.contains(&range.media_type.essence_str()))
+        .filter(|range| media_types.contains(&range.media_type.essence_str()))
+        .map(|range| Preference {
+            quality: range.quality,
+            order: range.order,
+        })
+        .reduce(|current, candidate| {
+            if prefers(candidate, current) {
+                candidate
+            } else {
+                current
+            }
+        })
+}
+
+fn prefers(left: Preference, right: Preference) -> bool {
+    left.quality > right.quality || (left.quality == right.quality && left.order < right.order)
 }
 
 fn parse_quality(value: &str) -> Option<u16> {
@@ -143,6 +166,29 @@ mod tests {
         assert!(!accepts_activitypub(&headers(Some("text/html, */*"))));
         assert!(!accepts_activitypub(&headers(Some(
             "application/activity+json;q=0, application/ld+json;q=0, application/json;q=0, */*;q=1"
+        ))));
+    }
+
+    #[test]
+    fn ignores_unsupported_types_when_comparing_supported_representations() {
+        assert!(!accepts_activitypub(&headers(Some(
+            "image/png, application/activity+json;q=0.5, text/html;q=0.8"
+        ))));
+        assert!(accepts_activitypub(&headers(Some(
+            "image/png, application/activity+json;q=0.8, text/html;q=0.5"
+        ))));
+        assert!(accepts_activitypub(&headers(Some(
+            "image/png, application/activity+json;q=0.5"
+        ))));
+    }
+
+    #[test]
+    fn compares_the_best_type_in_each_supported_representation() {
+        assert!(!accepts_activitypub(&headers(Some(
+            "text/html;q=0.2, application/xhtml+xml;q=0.9, application/activity+json;q=0.8"
+        ))));
+        assert!(accepts_activitypub(&headers(Some(
+            "text/html;q=0.8, application/activity+json;q=0.2, application/ld+json;q=0.9"
         ))));
     }
 }
