@@ -369,6 +369,7 @@ pub enum Recipients {
 pub enum Activity {
     Accept(vocab::Accept),
     CreateNote(vocab::Create<vocab::Note>),
+    Follow(vocab::Follow),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -731,7 +732,9 @@ mod tests {
                 assert_eq!(create.to, note.to);
                 assert_eq!(create.cc, note.cc);
             }
-            Activity::Accept(_) => panic!("expected Create<Note> activity"),
+            Activity::Accept(_) | Activity::Follow(_) => {
+                panic!("expected Create<Note> activity")
+            }
         }
 
         assert_eq!(

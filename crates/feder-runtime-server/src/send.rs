@@ -72,6 +72,7 @@ impl ActivitySender {
         let body = match &send.activity {
             Activity::Accept(activity) => serde_json::to_vec(activity),
             Activity::CreateNote(activity) => serde_json::to_vec(activity),
+            Activity::Follow(activity) => serde_json::to_vec(activity),
             _ => return Err(SendError::UnsupportedActivity),
         }
         .map_err(SendError::Serialize)?;
