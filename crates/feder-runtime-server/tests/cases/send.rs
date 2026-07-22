@@ -19,7 +19,7 @@ use feder_core::{
     http_signatures::{ActorKeyPair, sign_draft_cavage},
 };
 use feder_runtime_server::{OutboundAddressPolicy, send::SendError};
-use feder_vocab::{Create, Note, Reference};
+use feder_vocab::{Create, Follow, Note, Reference};
 
 use crate::common::{spawn_inbox_server, test_activity_sender, test_activity_sender_with_policy};
 
@@ -42,6 +42,29 @@ fn create_note_send_action(inbox: &str) -> SendActivity {
 
     SendActivity {
         activity: Activity::CreateNote(create),
+        recipients: Recipients::Inbox(inbox.parse().expect("valid inbox IRI")),
+    }
+}
+
+fn follow_send_action(inbox: &str) -> SendActivity {
+    let follow = Follow::new(
+        "https://local.example/activities/follow-1"
+            .parse()
+            .expect("valid activity IRI"),
+        Reference::id(
+            "https://local.example/users/alice"
+                .parse()
+                .expect("valid actor IRI"),
+        ),
+        Reference::id(
+            "https://remote.example/users/bob"
+                .parse()
+                .expect("valid actor IRI"),
+        ),
+    );
+
+    SendActivity {
+        activity: Activity::Follow(follow),
         recipients: Recipients::Inbox(inbox.parse().expect("valid inbox IRI")),
     }
 }
@@ -100,6 +123,27 @@ async fn sends_create_note_action() {
     assert_eq!(activity["type"], "Create");
     assert_eq!(activity["actor"], "https://local.example/users/alice");
     assert_eq!(activity["object"]["type"], "Note");
+    inbox_server.abort();
+}
+
+#[tokio::test]
+async fn sends_follow_action() {
+    let (inbox, mut requests, inbox_server) = spawn_inbox_server(StatusCode::ACCEPTED).await;
+
+    test_activity_sender()
+        .send_actions(&[follow_send_action(&inbox)])
+        .await
+        .expect("send Follow activity");
+
+    let request = requests.recv().await.expect("receive Follow request");
+    assert_eq!(request.uri, "/inbox");
+    assert_eq!(request.headers["content-type"], "application/activity+json");
+    assert!(request.headers.contains_key("signature"));
+    let activity: serde_json::Value =
+        serde_json::from_slice(&request.body).expect("valid sent activity");
+    assert_eq!(activity["type"], "Follow");
+    assert_eq!(activity["actor"], "https://local.example/users/alice");
+    assert_eq!(activity["object"], "https://remote.example/users/bob");
     inbox_server.abort();
 }
 
