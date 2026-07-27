@@ -18,7 +18,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use feder_core::{Action, Object, StoreObject};
+use feder_core::{Action, Object, PUBLIC_COLLECTION, StoreObject};
 use feder_runtime_server::{app::router_with_state, config::StorageConfig, storage::RuntimeStore};
 use feder_vocab::{Iri, Note, Reference, References};
 use serde_json::Value;
@@ -33,7 +33,7 @@ fn iri(value: &str) -> Iri {
 fn stored_note() -> Note {
     let mut note = Note::new(iri("http://127.0.0.1:3000/users/alice/posts/1"));
     note.attributed_to = Some(Reference::id(iri("http://127.0.0.1:3000/users/alice")));
-    note.to = References::one(iri("https://www.w3.org/ns/activitystreams#Public"));
+    note.to = References::one(iri(PUBLIC_COLLECTION));
     note.cc = References::one(iri("http://127.0.0.1:3000/users/alice/followers"));
     note.content = Some("Hello from Feder.".to_string());
     note.media_type = Some("text/html".to_string());
@@ -42,17 +42,21 @@ fn stored_note() -> Note {
     note
 }
 
-fn router_with_note() -> Router {
+fn router_with_stored_note(note: Note) -> Router {
     let state = test_app_state(test_config()).expect("build app state");
     state
         .store
         .lock()
         .expect("store lock")
         .persist_actions(&[Action::StoreObject(StoreObject {
-            object: Object::Note(stored_note()),
+            object: Object::Note(note),
         })])
         .expect("persist note");
     router_with_state(state)
+}
+
+fn router_with_note() -> Router {
+    router_with_stored_note(stored_note())
 }
 
 async fn get_object(app: Router, uri: &str, accept: Option<&str>) -> axum::response::Response {
@@ -90,6 +94,70 @@ async fn returns_stored_note_with_activitypub_headers() {
     assert_eq!(json["id"], "http://127.0.0.1:3000/users/alice/posts/1");
     assert_eq!(json["content"], "Hello from Feder.");
     assert_eq!(json["mediaType"], "text/html");
+}
+
+#[tokio::test]
+async fn returns_note_when_public_is_in_cc() {
+    let mut note = stored_note();
+    note.to = References::one(iri("https://remote.example/users/bob"));
+    note.cc = References::one(iri(PUBLIC_COLLECTION));
+
+    let response = get_object(
+        router_with_stored_note(note),
+        "/users/alice/posts/1",
+        Some("application/activity+json"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn returns_not_found_for_direct_note() {
+    let mut note = stored_note();
+    note.to = References::one(iri("https://remote.example/users/bob"));
+    note.cc = References::new();
+
+    let response = get_object(
+        router_with_stored_note(note),
+        "/users/alice/posts/1",
+        Some("application/activity+json"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn returns_not_found_for_followers_only_note() {
+    let mut note = stored_note();
+    note.to = References::one(iri("http://127.0.0.1:3000/users/alice/followers"));
+    note.cc = References::new();
+
+    let response = get_object(
+        router_with_stored_note(note),
+        "/users/alice/posts/1",
+        Some("application/activity+json"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn returns_not_found_for_note_without_audience() {
+    let mut note = stored_note();
+    note.to = References::new();
+    note.cc = References::new();
+
+    let response = get_object(
+        router_with_stored_note(note),
+        "/users/alice/posts/1",
+        Some("application/activity+json"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
