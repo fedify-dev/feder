@@ -25,6 +25,8 @@ pub use feder_vocab as vocab;
 #[cfg(feature = "http-signatures")]
 pub mod http_signatures;
 
+const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
+
 /// Portable core state and decision logic.
 #[derive(Debug)]
 pub struct FederCore {
@@ -229,18 +231,47 @@ impl FederState {
         create.to = note.to.clone();
         create.cc = note.cc.clone();
 
+        let recipients = note_recipients(&self.local_actor, &note);
+
         let object = Object::Note(note);
         self.objects.push(object.clone());
         self.activities.push(Activity::CreateNote(create.clone()));
 
-        Vec::from([
-            Action::StoreObject(StoreObject { object }),
-            Action::SendActivity(SendActivity {
-                activity: Activity::CreateNote(create),
-                recipients: Recipients::Followers(self.local_actor.id.clone()),
-            }),
-        ])
+        let mut actions = Vec::new();
+
+        actions.push(Action::StoreObject(StoreObject { object }));
+
+        for recipient in recipients {
+            actions.push(Action::SendActivity(SendActivity {
+                activity: Activity::CreateNote(create.clone()),
+                recipients: recipient,
+            }));
+        }
+
+        actions
     }
+}
+
+fn note_recipients(local_actor: &vocab::Actor, note: &vocab::Note) -> Vec<Recipients> {
+    let mut recipients = Vec::new();
+
+    for address in note.to.iter().chain(note.cc.iter()) {
+        let recipient = if address.as_str() == PUBLIC_COLLECTION {
+            // Public describes visibility. It cannot receive an activity.
+            continue;
+        } else if local_actor.followers.as_ref() == Some(address) {
+            Recipients::Followers(local_actor.id.clone())
+        } else if address == &local_actor.id {
+            continue;
+        } else {
+            Recipients::Actor(address.clone())
+        };
+
+        if !recipients.contains(&recipient) {
+            recipients.push(recipient);
+        }
+    }
+    recipients
 }
 
 fn reference_id<T>(reference: &vocab::Reference<T>) -> Option<&vocab::Iri>
