@@ -19,7 +19,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use feder_core::Object;
+use feder_core::{Object, PUBLIC_COLLECTION};
 use feder_vocab::Iri;
 
 use crate::{app::AppState, negotiation::accepts_activitypub, storage::RuntimeStore};
@@ -46,6 +46,14 @@ pub async fn get_object(
         return Err(StatusCode::NOT_FOUND);
     };
 
+    if !note
+        .to
+        .iter()
+        .chain(note.cc.iter())
+        .any(|recipient| recipient.as_str() == PUBLIC_COLLECTION)
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
     if !accepts_activitypub(&headers) {
         return Ok(([(header::VARY, "Accept")], StatusCode::NOT_ACCEPTABLE).into_response());
     }

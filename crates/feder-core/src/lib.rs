@@ -25,7 +25,7 @@ pub use feder_vocab as vocab;
 #[cfg(feature = "http-signatures")]
 pub mod http_signatures;
 
-const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
+pub const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
 
 /// Portable core state and decision logic.
 #[derive(Debug)]
