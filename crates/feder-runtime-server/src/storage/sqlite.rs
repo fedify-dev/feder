@@ -86,6 +86,7 @@ impl RuntimeStore for SqliteStore {
                     let following = actor_reference_id(&action.following);
                     let inbox = actor_reference_inbox(&action.follower);
                     let shared_inbox = actor_reference_shared_inbox(&action.follower);
+                    let refresh_actor = matches!(&action.follower, Reference::Object(_));
 
                     tx.execute(
                         r#"
@@ -97,17 +98,21 @@ impl RuntimeStore for SqliteStore {
                     )
                     VALUES (?1, ?2, ?3, ?4)
                     ON CONFLICT(follower_actor_id, following_actor_id) DO UPDATE SET
-                        inbox_url = COALESCE(excluded.inbox_url, followers.inbox_url),
-                        shared_inbox_url = COALESCE(
-                            excluded.shared_inbox_url,
-                            followers.shared_inbox_url
-                        )
+                        inbox_url = CASE
+                            WHEN ?5 THEN excluded.inbox_url
+                            ELSE followers.inbox_url
+                        END,
+                        shared_inbox_url = CASE
+                            WHEN ?5 THEN excluded.shared_inbox_url
+                            ELSE followers.shared_inbox_url
+                        END
                     "#,
                         params![
                             follower.as_str(),
                             following.as_str(),
                             inbox.map(|inbox| inbox.as_str()),
                             shared_inbox.map(|shared_inbox| shared_inbox.as_str()),
+                            refresh_actor,
                         ],
                     )?;
                 }
@@ -769,6 +774,74 @@ mod tests {
                 actor_id: iri("https://remote.example/users/bob"),
                 inbox: iri("https://remote.example/users/bob/updated-inbox"),
                 shared_inbox: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn persist_actions_clears_removed_shared_inbox_from_embedded_actor() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let mut follower = actor("https://remote.example/users/bob");
+        follower.endpoints = Some(feder_vocab::Endpoints {
+            shared_inbox: Some(iri("https://remote.example/inbox")),
+        });
+        store
+            .persist_actions(&[Action::StoreFollower(StoreFollower {
+                follower: Reference::object(follower),
+                following: Reference::id(iri("https://example.com/users/alice")),
+            })])
+            .expect("persist follower with shared inbox");
+
+        let mut updated_follower = actor("https://remote.example/users/bob");
+        updated_follower.inbox = iri("https://remote.example/users/bob/updated-inbox");
+        store
+            .persist_actions(&[Action::StoreFollower(StoreFollower {
+                follower: Reference::object(updated_follower),
+                following: Reference::id(iri("https://example.com/users/alice")),
+            })])
+            .expect("persist follower without shared inbox");
+
+        let recipients = store
+            .list_follower_recipients(&iri("https://example.com/users/alice"))
+            .expect("list follower recipients");
+
+        assert_eq!(
+            recipients,
+            vec![StoredRecipient {
+                actor_id: iri("https://remote.example/users/bob"),
+                inbox: iri("https://remote.example/users/bob/updated-inbox"),
+                shared_inbox: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn persist_actions_preserves_inboxes_from_id_only_repeated_follow() {
+        let mut store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let mut follower = actor("https://remote.example/users/bob");
+        follower.endpoints = Some(feder_vocab::Endpoints {
+            shared_inbox: Some(iri("https://remote.example/inbox")),
+        });
+        store
+            .persist_actions(&[Action::StoreFollower(StoreFollower {
+                follower: Reference::object(follower),
+                following: Reference::id(iri("https://example.com/users/alice")),
+            })])
+            .expect("persist embedded follower");
+        store
+            .persist_actions(&[store_follower_action()])
+            .expect("persist ID-only repeated follower");
+
+        let recipients = store
+            .list_follower_recipients(&iri("https://example.com/users/alice"))
+            .expect("list follower recipients");
+
+        assert_eq!(
+            recipients,
+            vec![StoredRecipient {
+                actor_id: iri("https://remote.example/users/bob"),
+                inbox: iri("https://remote.example/users/bob/inbox"),
+                shared_inbox: Some(iri("https://remote.example/inbox")),
             }]
         );
     }
