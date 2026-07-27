@@ -446,7 +446,9 @@ mod tests {
     }
 
     fn core() -> FederCore {
-        FederCore::new(FederConfig::new(actor("https://example.com/users/alice")))
+        let mut local_actor = actor("https://example.com/users/alice");
+        local_actor.followers = Some(iri("https://example.com/users/alice/followers"));
+        FederCore::new(FederConfig::new(local_actor))
     }
 
     fn received_follow(follow: vocab::Follow, id: &str) -> Input {
@@ -822,7 +824,7 @@ mod tests {
             create_id: iri("https://example.com/activities/create/1"),
             actor: vocab::Reference::id(iri("https://example.com/users/alice")),
             to: vocab::References::new(),
-            cc: vocab::References::new(),
+            cc: vocab::References::one(iri("https://example.com/users/alice/followers")),
             content: "Hello from Feder.".to_string(),
             media_type: None,
             published: Some("2026-06-10T00:00:00Z".to_string()),
@@ -865,7 +867,8 @@ mod tests {
         let mut core = core();
         let result = core.handle(Input::UserCreateNote(input));
 
-        assert_eq!(result.actions.len(), 2);
+        assert_eq!(result.actions.len(), 1);
+        assert!(matches!(result.actions[0], Action::StoreObject(_)));
 
         let Object::Note(note) = &core.state().objects()[0];
         assert_eq!(
@@ -880,6 +883,53 @@ mod tests {
             create.actor,
             vocab::Reference::id(iri("https://example.com/users/alice"))
         );
+    }
+
+    #[test]
+    fn user_create_note_emits_one_direct_delivery_for_duplicate_actor_addresses() {
+        let bob = iri("https://remote.example/users/bob");
+        let input = UserCreateNote {
+            note_id: iri("https://example.com/notes/1"),
+            create_id: iri("https://example.com/activities/create/1"),
+            actor: vocab::Reference::id(iri("https://example.com/users/alice")),
+            to: vocab::References::one(bob.clone()),
+            cc: vocab::References::one(bob.clone()),
+            content: "Hello Bob.".to_string(),
+            media_type: None,
+            published: None,
+            url: None,
+        };
+
+        let mut core = core();
+        let result = core.handle(Input::UserCreateNote(input));
+
+        assert_eq!(result.actions.len(), 2);
+        assert!(matches!(result.actions[0], Action::StoreObject(_)));
+        let Action::SendActivity(send) = &result.actions[1] else {
+            panic!("expected direct delivery action");
+        };
+        assert_eq!(send.recipients, Recipients::Actor(bob));
+    }
+
+    #[test]
+    fn user_create_note_does_not_deliver_to_public_collection() {
+        let input = UserCreateNote {
+            note_id: iri("https://example.com/notes/1"),
+            create_id: iri("https://example.com/activities/create/1"),
+            actor: vocab::Reference::id(iri("https://example.com/users/alice")),
+            to: vocab::References::one(iri(PUBLIC_COLLECTION)),
+            cc: vocab::References::new(),
+            content: "Hello everyone.".to_string(),
+            media_type: None,
+            published: None,
+            url: None,
+        };
+
+        let mut core = core();
+        let result = core.handle(Input::UserCreateNote(input));
+
+        assert_eq!(result.actions.len(), 1);
+        assert!(matches!(result.actions[0], Action::StoreObject(_)));
     }
 
     #[test]
