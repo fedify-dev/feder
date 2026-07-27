@@ -362,6 +362,7 @@ pub enum Recipients {
     Inbox(vocab::Iri),
     /// Deliver to the current followers of this local actor.
     Followers(vocab::Iri),
+    Actor(vocab::Iri),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

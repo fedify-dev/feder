@@ -33,47 +33,61 @@ impl AppState {
             let mut core = self.core.lock().map_err(|_| Error::CoreStateUnavailable)?;
             core.handle(input)
         };
-
-        let deliveries = {
+        {
             let mut store = self
                 .store
                 .lock()
                 .map_err(|_| Error::StorageStateUnavailable)?;
             store.persist_actions(&result.actions)?;
-            resolve_outbound_deliveries(&*store, &result.actions)?
         };
+        let deliveries = self.resolve_outbound_deliveries(&result.actions).await?;
 
         self.activity_sender.send_actions(&deliveries).await?;
 
         Ok(result)
     }
-}
 
-fn resolve_outbound_deliveries(
-    store: &impl RuntimeStore,
-    actions: &[Action],
-) -> Result<Vec<SendActivity>, Error> {
-    let mut resolved = Vec::new();
+    async fn resolve_outbound_deliveries(
+        &self,
+        actions: &[Action],
+    ) -> Result<Vec<SendActivity>, Error> {
+        let mut resolved = Vec::new();
 
-    for action in actions {
-        if let Action::SendActivity(send) = action {
-            match &send.recipients {
-                Recipients::Inbox(_) => resolved.push(send.clone()),
-                Recipients::Followers(actor) => {
-                    let mut seen_inboxes = HashSet::new();
-                    for recipient in store.list_follower_recipients(actor)? {
-                        let inbox = recipient.shared_inbox.unwrap_or(recipient.inbox);
-                        if seen_inboxes.insert(inbox.clone()) {
-                            resolved.push(SendActivity {
-                                activity: send.activity.clone(),
-                                recipients: Recipients::Inbox(inbox),
-                            });
+        for action in actions {
+            if let Action::SendActivity(send) = action {
+                match &send.recipients {
+                    Recipients::Inbox(_) => resolved.push(send.clone()),
+                    Recipients::Followers(actor_id) => {
+                        let mut seen_inboxes = HashSet::new();
+                        let recipients = {
+                            let store = self
+                                .store
+                                .lock()
+                                .map_err(|_| Error::StorageStateUnavailable)?;
+                            store.list_follower_recipients(actor_id)?
+                        };
+                        for recipient in recipients {
+                            let inbox = recipient.shared_inbox.unwrap_or(recipient.inbox);
+                            if seen_inboxes.insert(inbox.clone()) {
+                                resolved.push(SendActivity {
+                                    activity: send.activity.clone(),
+                                    recipients: Recipients::Inbox(inbox),
+                                });
+                            }
                         }
+                    }
+                    Recipients::Actor(actor_id) => {
+                        let actor = self.actor_resolver.resolve(actor_id).await?;
+
+                        resolved.push(SendActivity {
+                            activity: send.activity.clone(),
+                            recipients: Recipients::Inbox(actor.inbox),
+                        })
                     }
                 }
             }
         }
-    }
 
-    Ok(resolved)
+        Ok(resolved)
+    }
 }
