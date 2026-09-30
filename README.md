@@ -1,10 +1,7 @@
 Feder
 =====
 
-One ActivityPub core, many runtimes.
-
-Feder is an early-stage Rust project for building ActivityPub applications from
-a portable protocol core and platform-specific runtimes.
+Embedded-first ActivityPub server framework.
 
 
 Motivation
